@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Speech Bubble Background -->
+  <path 
+    d="M 96 64 C 64 64 64 64 64 96 L 64 352 C 64 384 64 384 96 384 L 224 384 L 256 448 L 288 384 L 416 384 C 448 384 448 384 448 352 L 448 96 C 448 64 448 64 416 64 Z" 
+    fill="#2d5a7a"
+  />
+  
+  <!-- Left Motion Lines (white) -->
+  <line x1="100" y1="175" x2="140" y2="175" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  <line x1="90" y1="210" x2="145" y2="210" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  <line x1="100" y1="245" x2="140" y2="245" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  
+  <!-- Right Motion Lines (white) -->
+  <line x1="372" y1="175" x2="412" y2="175" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  <line x1="367" y1="210" x2="422" y2="210" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  <line x1="372" y1="245" x2="412" y2="245" stroke="white" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+  
+  <!-- Letter S -->
+  <text 
+    x="256" 
+    y="280" 
+    font-family="Arial, Helvetica, sans-serif" 
+    font-size="220" 
+    font-weight="bold" 
+    fill="white" 
+    text-anchor="middle" 
+    dominant-baseline="middle"
+  >S</text>
+</svg>
