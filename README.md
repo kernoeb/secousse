@@ -4,6 +4,8 @@ An open-source streaming client for Twitch, built with Tauri 2, React, TypeScrip
 
 *Secousse* is French for "twitch" (as in a sudden movement).
 
+![Secousse Screenshot](screenshot.png)
+
 ## Features
 
 - **Live Stream Playback** - HLS video streaming with quality selection
