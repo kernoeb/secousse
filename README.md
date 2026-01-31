@@ -61,6 +61,10 @@ secousse/
 └── package.json
 ```
 
+## Acknowledgments
+
+This project is inspired by [Xtra](https://github.com/crackededed/Xtra), an excellent open-source Twitch client for Android. Thank you to the Xtra team for their work!
+
 ## License
 
 MIT
