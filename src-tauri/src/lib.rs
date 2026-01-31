@@ -155,10 +155,18 @@ async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: St
     let username: Option<String> = if access_token.is_some() {
         let client = state.twitch_client.lock().await;
         match client.get_self_info().await {
-            Ok(data) => data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string()),
-            Err(_) => None,
+            Ok(data) => {
+                let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
+                info!("[connect_to_chat] Got username from self_info: {:?}", username);
+                username
+            },
+            Err(e) => {
+                error!("[connect_to_chat] Failed to get self_info: {}", e);
+                None
+            },
         }
     } else {
+        info!("[connect_to_chat] No access_token, connecting anonymously");
         None
     };
     
@@ -179,10 +187,16 @@ async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: St
 
 #[tauri::command]
 async fn send_chat_message(state: State<'_, AppState>, message: String) -> Result<(), String> {
+    info!("[send_chat_message] Attempting to send: {}", message);
     let sender_lock = state.chat_sender.lock().await;
     if let Some(sender) = &*sender_lock {
-        sender.send(message).await.map_err(|e| e.to_string())
+        info!("[send_chat_message] Sender found, sending message");
+        sender.send(message).await.map_err(|e| {
+            error!("[send_chat_message] Send error: {}", e);
+            e.to_string()
+        })
     } else {
+        error!("[send_chat_message] Not connected to chat");
         Err("Not connected to chat".to_string())
     }
 }

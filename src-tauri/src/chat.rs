@@ -109,8 +109,13 @@ pub async fn connect_chat(
                     match msg {
                         Some(text) => {
                             let irc_msg = format!("PRIVMSG #{} :{}", channel_for_write, text);
-                            if write.send(Message::Text(irc_msg.into())).await.is_err() {
-                                break;
+                            info!("[Chat] Sending message: {}", irc_msg);
+                            match write.send(Message::Text(irc_msg.into())).await {
+                                Ok(_) => info!("[Chat] Message sent successfully"),
+                                Err(e) => {
+                                    error!("[Chat] Failed to send message: {}", e);
+                                    break;
+                                }
                             }
                         }
                         None => break,
