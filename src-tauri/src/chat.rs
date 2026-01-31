@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
+    pub id: String,
     pub user: String,
     pub message: String,
     pub color: Option<String>,
@@ -133,6 +134,13 @@ fn parse_irc_message(text: &str) -> Option<ChatMessage> {
 
     let message = content_parts[1].trim();
     
+    // Extract message ID for deduplication
+    let id = tags_part.split(';')
+        .find(|s| s.starts_with("id="))
+        .and_then(|s| s.split('=').nth(1))
+        .unwrap_or("")
+        .to_string();
+    
     let user = tags_part.split(';')
         .find(|s| s.starts_with("display-name="))
         .and_then(|s| s.split('=').nth(1))
@@ -158,6 +166,7 @@ fn parse_irc_message(text: &str) -> Option<ChatMessage> {
     }
 
     Some(ChatMessage {
+        id,
         user: user.to_string(),
         message: message.to_string(),
         color,

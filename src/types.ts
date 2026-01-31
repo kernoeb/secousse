@@ -77,6 +77,7 @@ export interface SearchResult {
 
 /** Chat message from IRC */
 export interface ChatMessage {
+  id: string;
   user: string;
   message: string;
   color?: string;

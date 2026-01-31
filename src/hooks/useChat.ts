@@ -21,17 +21,22 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   const chatEndRef = useRef<HTMLDivElement>(null);
   const currentChannelRef = useRef<string | null>(null);
 
+  // Track seen message IDs to prevent duplicates
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
   // Connect to chat when channel changes
   useEffect(() => {
     if (!channel) {
       currentChannelRef.current = null;
       setMessages([]);
+      seenIdsRef.current.clear();
       return;
     }
 
     info(`[useChat] Connecting to chat: ${channel}`);
     currentChannelRef.current = channel;
     setMessages([]);
+    seenIdsRef.current.clear();
     setIsAtBottom(true);
 
     invoke("connect_to_chat", { channel }).catch(err => {
@@ -50,17 +55,22 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
         return;
       }
 
-      setMessages((prev) => {
-        // Check for duplicate (same user, same message, within 100ms)
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg &&
-            lastMsg.user === newMsg.user &&
-            lastMsg.message === newMsg.message &&
-            Date.now() - lastMsg.timestamp < 100) {
-          return prev;
+      // Skip if we've already seen this message ID
+      if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
+        debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
+        return;
+      }
+
+      // Add to seen IDs (keep last 500 to prevent memory growth)
+      if (newMsg.id) {
+        seenIdsRef.current.add(newMsg.id);
+        if (seenIdsRef.current.size > 500) {
+          const firstId = seenIdsRef.current.values().next().value;
+          if (firstId) seenIdsRef.current.delete(firstId);
         }
-        return [...prev, { ...newMsg, timestamp: Date.now() }].slice(-200);
-      });
+      }
+
+      setMessages((prev) => [...prev, { ...newMsg, timestamp: Date.now() }].slice(-200));
     });
     return () => { unlisten.then(f => f()); };
   }, []);
