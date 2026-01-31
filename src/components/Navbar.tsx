@@ -20,6 +20,7 @@ interface NavbarProps {
   onOpenSidebar: () => void;
   onLoadTopStreams: () => void;
   hasTopStreams: boolean;
+  onGoHome: () => void;
 }
 
 export function Navbar({
@@ -40,13 +41,18 @@ export function Navbar({
   onOpenSidebar,
   onLoadTopStreams,
   hasTopStreams,
+  onGoHome,
 }: NavbarProps) {
   return (
     <nav className="h-12 border-b border-black flex items-center justify-between px-4 bg-[#18181b] z-50">
       <div className="flex items-center gap-4 h-full">
-        <div className="w-8 h-8 bg-[#9146ff] rounded-md flex items-center justify-center font-bold cursor-pointer">
-          S
-        </div>
+        <button
+          onClick={onGoHome}
+          className="w-8 h-8 rounded-md flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
+          title="Home"
+        >
+          <img src="/app-icon.svg" alt="Secousse" className="w-8 h-8" />
+        </button>
         <button
           onClick={() => {
             setActiveTab("following");

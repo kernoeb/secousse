@@ -198,6 +198,13 @@ export default function App() {
         onOpenSidebar={() => setIsSidebarOpen(true)}
         onLoadTopStreams={() => loadTopStreams()}
         hasTopStreams={topStreams.length > 0}
+        onGoHome={() => {
+          setChannel(null);
+          setActiveTab("browse");
+          if (topStreams.length === 0) {
+            loadTopStreams();
+          }
+        }}
       />
 
       <div className="flex flex-1 overflow-hidden">
