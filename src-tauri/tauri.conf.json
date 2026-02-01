@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Secousse",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 900,
-        "minHeight": 700
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

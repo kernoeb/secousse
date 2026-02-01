@@ -4,6 +4,7 @@ pub mod emotes;
 
 use log::{info, error};
 use tauri::{State, Window, Manager, Emitter};
+use tauri::window::Color;
 use twitch::{TwitchClient, CHROME_UA};
 use tokio::sync::Mutex;
 use emotes::Emote;
@@ -23,6 +24,11 @@ pub struct AppState {
     pub chat_sender: Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
     pub watch_state: Mutex<Option<WatchState>>,
     pub cached_username: Mutex<Option<String>>,
+}
+
+#[tauri::command]
+async fn show_main_window(window: Window) {
+    let _ = window.show();
 }
 
 #[tauri::command]
@@ -464,6 +470,25 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
+            // Create window programmatically with full control
+            use tauri::WebviewWindowBuilder;
+            
+            let window = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+                .title("Secousse")
+                .inner_size(1440.0, 900.0)
+                .min_inner_size(900.0, 700.0)
+                .background_color(Color(24, 24, 27, 255))
+                .visible(false)
+                .build()?;
+            
+            // Safety fallback: Force show window after 2s if frontend doesn't signal ready
+            // This prevents the app from being "invisible" if JS crashes
+            let window_clone = window.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                let _ = window_clone.show();
+            });
+            
             let store = app.store("settings.bin")?;
             let device_id = store.get("device_id").and_then(|v| v.as_str().map(|s| s.to_string()));
             let access_token = store.get("access_token").and_then(|v| v.as_str().map(|s| s.to_string()));
@@ -539,7 +564,8 @@ pub fn run() {
             get_channel_emotes, get_global_emotes, get_global_badges, get_channel_badges,
             get_twitch_global_emotes, get_twitch_channel_emotes,
             login, logout, is_logged_in, update_watch_state, set_access_token,
-            search_channels, follow_channel, unfollow_channel, get_top_streams
+            search_channels, follow_channel, unfollow_channel, get_top_streams,
+            show_main_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

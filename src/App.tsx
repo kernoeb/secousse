@@ -51,6 +51,12 @@ export default function App() {
     // Attach console once to forward browser logs to Rust
     attachConsole();
     info("[App] Initializing...");
+
+    // Signal Rust to show the window when the UI is ready
+    // Using setTimeout 0 inside useEffect ensures this runs after the first paint cycle
+    setTimeout(() => {
+        invoke("show_main_window");
+    }, 0);
     
     // Delay initial load to let dependencies stabilize
     const timer = setTimeout(() => {
