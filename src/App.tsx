@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
@@ -26,6 +26,11 @@ export default function App() {
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
   const chat = useChat(channel, isLoggedIn);
   
+  // Refs to prevent double initialization
+  const intervalsRef = useRef<{ sidebar?: ReturnType<typeof setInterval>; stream?: ReturnType<typeof setInterval> }>({});
+  const loadingChannelRef = useRef<string | null>(null);
+  const isMounted = useRef(false);
+  
   // Wrapper to persist channel
   const setChannel = useCallback((newChannel: string | null) => {
     persistChannel(newChannel);
@@ -43,9 +48,15 @@ export default function App() {
 
   // Initialize app
   useEffect(() => {
+    // Attach console once to forward browser logs to Rust
     attachConsole();
     info("[App] Initializing...");
-    loadTopStreams();
+    
+    // Delay initial load to let dependencies stabilize
+    const timer = setTimeout(() => {
+      isMounted.current = true;
+      loadTopStreams();
+    }, 100);
 
     // ESC key to exit video fullscreen
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -54,7 +65,10 @@ export default function App() {
       }
     };
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      clearTimeout(timer);
+    };
   }, [loadTopStreams]);
 
   // Auto-refresh sidebar data every 60 seconds
@@ -71,8 +85,19 @@ export default function App() {
       }
     };
 
+    // Clear existing interval before setting new one
+    if (intervalsRef.current.sidebar) {
+      clearInterval(intervalsRef.current.sidebar);
+    }
+    
     const intervalId = setInterval(refreshData, REFRESH_INTERVAL);
-    return () => clearInterval(intervalId);
+    intervalsRef.current.sidebar = intervalId;
+    
+    return () => {
+      if (intervalsRef.current.sidebar) {
+        clearInterval(intervalsRef.current.sidebar);
+      }
+    };
   }, [activeTab, isLoggedIn, selfInfo?.id, refreshFollowedChannels, loadTopStreams]);
 
   // Auto-refresh current stream info every 60 seconds
@@ -100,16 +125,40 @@ export default function App() {
       }
     };
 
+    // Clear existing interval before setting new one
+    if (intervalsRef.current.stream) {
+      clearInterval(intervalsRef.current.stream);
+    }
+    
     const intervalId = setInterval(refreshStreamInfo, REFRESH_INTERVAL);
-    return () => clearInterval(intervalId);
+    intervalsRef.current.stream = intervalId;
+    
+    return () => {
+      if (intervalsRef.current.stream) {
+        clearInterval(intervalsRef.current.stream);
+      }
+    };
   }, [channel, isLoggedIn, selfInfo]);
 
   // Load channel data when channel changes
   useEffect(() => {
-    if (!channel) {
-      setUserInfo(null);
+    // Skip during initial mount phase
+    if (!isMounted.current) {
       return;
     }
+    
+    if (!channel) {
+      setUserInfo(null);
+      loadingChannelRef.current = null;
+      return;
+    }
+    
+    // Guard against loading the same channel multiple times
+    // Check and set synchronously to prevent race conditions
+    if (loadingChannelRef.current === channel) {
+      return;
+    }
+    loadingChannelRef.current = channel;
 
     async function loadChannelData() {
       try {
@@ -122,24 +171,29 @@ export default function App() {
         if (!data.user?.stream) {
           info(`[App] Channel ${channel} is offline`);
           setIsLoadingStream(false);
+          loadingChannelRef.current = null;
           return;
         }
 
-        // Load emotes for this channel
-        await loadChannelEmotes(data.user.id);
-
-        // Update watch state
-        if (isLoggedIn && selfInfo && data.user.stream) {
-          await invoke("update_watch_state", {
-            channelLogin: data.user.login,
-            channelId: data.user.id,
-            streamId: data.user.stream.id,
-            userId: selfInfo.id,
-          });
-        }
+        // Load emotes and update watch state in parallel
+        const emotesPromise = loadChannelEmotes(data.user.id);
+        const watchStatePromise = isLoggedIn && selfInfo
+          ? invoke("update_watch_state", {
+              channelLogin: data.user.login,
+              channelId: data.user.id,
+              streamId: data.user.stream.id,
+              userId: selfInfo.id,
+            })
+          : Promise.resolve();
+        
+        await Promise.all([emotesPromise, watchStatePromise]);
+        
+        setIsLoadingStream(false);
+        loadingChannelRef.current = null;
       } catch (err) {
         logError(`[App] Failed to load channel data: ${err}`);
         setIsLoadingStream(false);
+        loadingChannelRef.current = null;
       }
     }
 
@@ -259,6 +313,7 @@ export default function App() {
           globalBadges={globalBadges}
           channelBadges={channelBadges}
           isLoggedIn={isLoggedIn}
+          isConnected={chat.isConnected}
           isAtBottom={chat.isAtBottom}
           chatContainerRef={chat.chatContainerRef}
           chatEndRef={chat.chatEndRef}

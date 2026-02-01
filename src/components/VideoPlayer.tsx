@@ -162,7 +162,8 @@ export function VideoPlayer({
   }, []);
 
   // Show offline screen if channel exists but is not live
-  if (!userInfo?.stream && !isLoadingStream) {
+  // Only show offline if we have user info and confirmed no stream
+  if (userInfo && !userInfo.stream && !isLoadingStream) {
     return (
       <div className="flex-1 relative bg-black">
         <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">

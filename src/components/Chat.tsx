@@ -11,6 +11,7 @@ interface ChatProps {
   globalBadges: TwitchBadge[];
   channelBadges: TwitchBadge[];
   isLoggedIn: boolean;
+  isConnected: boolean;
   isAtBottom: boolean;
   chatContainerRef: React.RefObject<HTMLDivElement | null>;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
@@ -27,6 +28,7 @@ export function Chat({
   globalBadges,
   channelBadges,
   isLoggedIn,
+  isConnected,
   isAtBottom,
   chatContainerRef,
   chatEndRef,
@@ -105,14 +107,14 @@ export function Chat({
         <div className="p-3 bg-[#18181b] border-t border-black">
           <div className="relative mb-3">
             <textarea
-              placeholder={isLoggedIn ? "Send a message" : "Log in to chat"}
+              placeholder={!isLoggedIn ? "Log in to chat" : !isConnected ? "Connecting to chat..." : "Send a message"}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={!isLoggedIn}
+              disabled={!isLoggedIn || !isConnected}
               className={cn(
                 "w-full bg-[#0e0e10] border border-[#3f3f46] rounded-md p-2 text-sm focus:outline-none focus:border-[#9146ff] resize-none min-h-[44px] max-h-[160px] transition-all placeholder:text-white/20",
-                !isLoggedIn && "opacity-50 cursor-not-allowed"
+                (!isLoggedIn || !isConnected) && "opacity-50 cursor-not-allowed"
               )}
             />
           </div>
@@ -122,10 +124,10 @@ export function Chat({
             </button>
             <button
               onClick={handleSend}
-              disabled={!isLoggedIn || !chatInput.trim()}
+              disabled={!isLoggedIn || !isConnected || !chatInput.trim()}
               className={cn(
                 "bg-[#9146ff] hover:bg-[#772ce8] px-4 py-1.5 rounded-md font-bold text-[13px] transition-all shadow-lg shadow-[#9146ff]/20 active:scale-95 text-white flex items-center gap-2",
-                (!isLoggedIn || !chatInput.trim()) && "opacity-50 cursor-not-allowed"
+                (!isLoggedIn || !isConnected || !chatInput.trim()) && "opacity-50 cursor-not-allowed"
               )}
             >
               <Send className="w-4 h-4" /> Chat

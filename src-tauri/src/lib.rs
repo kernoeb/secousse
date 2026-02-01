@@ -22,6 +22,7 @@ pub struct AppState {
     pub chat_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub chat_sender: Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
     pub watch_state: Mutex<Option<WatchState>>,
+    pub cached_username: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -74,7 +75,15 @@ async fn get_self_info(state: State<'_, AppState>) -> Result<serde_json::Value, 
     if !client.is_authenticated() {
         return Err("Not logged in".to_string());
     }
-    client.get_self_info().await.map_err(|e| e.to_string())
+    let result = client.get_self_info().await.map_err(|e| e.to_string())?;
+    
+    // Cache the username for chat connections
+    if let Some(username) = result.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()) {
+        let mut cache = state.cached_username.lock().await;
+        *cache = Some(username.to_string());
+    }
+    
+    Ok(result)
 }
 
 #[tauri::command]
@@ -151,19 +160,32 @@ async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: St
         client.access_token.clone()
     };
     
-    // If authenticated, get the username
+    // If authenticated, get the username (use cache if available)
     let username: Option<String> = if access_token.is_some() {
-        let client = state.twitch_client.lock().await;
-        match client.get_self_info().await {
-            Ok(data) => {
-                let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
-                info!("[connect_to_chat] Got username from self_info: {:?}", username);
-                username
-            },
-            Err(e) => {
-                error!("[connect_to_chat] Failed to get self_info: {}", e);
-                None
-            },
+        // Check cache first
+        let cached = state.cached_username.lock().await.clone();
+        if let Some(user) = cached {
+            info!("[connect_to_chat] Using cached username: {}", user);
+            Some(user)
+        } else {
+            // Fetch from API and cache it
+            let client = state.twitch_client.lock().await;
+            match client.get_self_info().await {
+                Ok(data) => {
+                    let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
+                    info!("[connect_to_chat] Got username from API: {:?}", username);
+                    // Cache the username for future use
+                    if let Some(ref user) = username {
+                        let mut cache = state.cached_username.lock().await;
+                        *cache = Some(user.clone());
+                    }
+                    username
+                },
+                Err(e) => {
+                    error!("[connect_to_chat] Failed to get self_info: {}", e);
+                    None
+                },
+            }
         }
     } else {
         info!("[connect_to_chat] No access_token, connecting anonymously");
@@ -434,6 +456,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new()
             .level(log::LevelFilter::Info)
+            .clear_targets()
             .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout))
             .build())
         .plugin(tauri_plugin_opener::init())
@@ -459,6 +482,7 @@ pub fn run() {
                 chat_handle: Mutex::new(None),
                 chat_sender: Mutex::new(None),
                 watch_state: Mutex::new(None),
+                cached_username: Mutex::new(None),
             });
 
             // Validate token on startup

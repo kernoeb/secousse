@@ -101,10 +101,21 @@ pub async fn fetch_ffz_emotes(channel_id: &str) -> Vec<Emote> {
 }
 
 pub async fn fetch_global_emotes() -> Vec<Emote> {
+    let (stv_emotes, bttv_emotes) = tokio::join!(
+        fetch_7tv_global_emotes(),
+        fetch_bttv_global_emotes()
+    );
+    
+    let mut emotes = Vec::new();
+    emotes.extend(stv_emotes);
+    emotes.extend(bttv_emotes);
+    emotes
+}
+
+async fn fetch_7tv_global_emotes() -> Vec<Emote> {
     let mut emotes = Vec::new();
     let client = reqwest::Client::new();
 
-    // 7TV Global
     if let Ok(res) = client.get("https://7tv.io/v3/emote-sets/global").send().await {
         if let Ok(json) = res.json::<serde_json::Value>().await {
             if let Some(list) = json.get("emotes").and_then(|e| e.as_array()) {
@@ -122,7 +133,13 @@ pub async fn fetch_global_emotes() -> Vec<Emote> {
         }
     }
 
-    // BTTV Global
+    emotes
+}
+
+async fn fetch_bttv_global_emotes() -> Vec<Emote> {
+    let mut emotes = Vec::new();
+    let client = reqwest::Client::new();
+
     if let Ok(res) = client.get("https://api.betterttv.net/3/cached/emotes/global").send().await {
         if let Ok(json) = res.json::<serde_json::Value>().await {
             if let Some(list) = json.as_array() {

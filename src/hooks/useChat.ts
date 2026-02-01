@@ -7,6 +7,7 @@ import type { ChatMessage } from "../types";
 interface UseChatReturn {
   messages: ChatMessage[];
   isAtBottom: boolean;
+  isConnected: boolean;
   chatContainerRef: React.RefObject<HTMLDivElement | null>;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   sendMessage: (message: string) => Promise<void>;
@@ -17,9 +18,13 @@ interface UseChatReturn {
 export function useChat(channel: string | null, isLoggedIn: boolean): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const currentChannelRef = useRef<string | null>(null);
+  const connectingRef = useRef<string | null>(null);
+  const messageListenerRef = useRef<(() => void) | null>(null);
+  const disconnectListenerRef = useRef<(() => void) | null>(null);
 
   // Track seen message IDs to prevent duplicates
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -28,10 +33,19 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   useEffect(() => {
     if (!channel) {
       currentChannelRef.current = null;
+      connectingRef.current = null;
+      setIsConnected(false);
       setMessages([]);
       seenIdsRef.current.clear();
       return;
     }
+    
+    // Guard against duplicate connections
+    if (connectingRef.current === channel) {
+      return;
+    }
+    connectingRef.current = channel;
+    setIsConnected(false);
 
     info(`[useChat] Connecting to chat: ${channel}`);
     currentChannelRef.current = channel;
@@ -39,63 +53,99 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     seenIdsRef.current.clear();
     setIsAtBottom(true);
 
-    invoke("connect_to_chat", { channel }).catch(err => {
-      logError(`[useChat] Failed to connect to chat: ${err}`);
-    });
+    invoke("connect_to_chat", { channel })
+      .then(() => {
+        setIsConnected(true);
+      })
+      .catch(err => {
+        logError(`[useChat] Failed to connect to chat: ${err}`);
+        connectingRef.current = null;
+        setIsConnected(false);
+      });
   }, [channel]);
 
   // Listen for chat messages
   useEffect(() => {
-    const unlisten = listen<ChatMessage>("chat-message", (event) => {
-      const newMsg = event.payload;
+    // Prevent duplicate listener registration
+    if (messageListenerRef.current) return;
+    
+    const setupListener = async () => {
+      const unlisten = await listen<ChatMessage>("chat-message", (event) => {
+        const newMsg = event.payload;
 
-      // Only accept messages from the current channel
-      if (newMsg.channel !== currentChannelRef.current) {
-        debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
-        return;
-      }
-
-      // Skip if we've already seen this message ID
-      if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
-        debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
-        return;
-      }
-
-      // Add to seen IDs (keep last 500 to prevent memory growth)
-      if (newMsg.id) {
-        seenIdsRef.current.add(newMsg.id);
-        if (seenIdsRef.current.size > 500) {
-          const firstId = seenIdsRef.current.values().next().value;
-          if (firstId) seenIdsRef.current.delete(firstId);
+        // Only accept messages from the current channel
+        if (newMsg.channel !== currentChannelRef.current) {
+          debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
+          return;
         }
-      }
 
-      setMessages((prev) => [...prev, { ...newMsg, timestamp: Date.now() }].slice(-200));
-    });
-    return () => { unlisten.then(f => f()); };
+        // Skip if we've already seen this message ID
+        if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
+          debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
+          return;
+        }
+
+        // Add to seen IDs (keep last 500 to prevent memory growth)
+        if (newMsg.id) {
+          seenIdsRef.current.add(newMsg.id);
+          if (seenIdsRef.current.size > 500) {
+            const firstId = seenIdsRef.current.values().next().value;
+            if (firstId) seenIdsRef.current.delete(firstId);
+          }
+        }
+
+        setMessages((prev) => [...prev, { ...newMsg, timestamp: Date.now() }].slice(-200));
+      });
+      messageListenerRef.current = unlisten;
+    };
+    
+    setupListener();
+    
+    return () => {
+      if (messageListenerRef.current) {
+        messageListenerRef.current();
+        messageListenerRef.current = null;
+      }
+    };
   }, []);
 
   // Handle chat disconnection and auto-reconnect
   useEffect(() => {
-    const unlisten = listen<string>("chat-disconnected", async (event) => {
-      const disconnectedChannel = event.payload;
-      info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
-
-      if (disconnectedChannel === channel) {
-        info("[useChat] Attempting to reconnect...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    // Prevent duplicate listener registration
+    if (disconnectListenerRef.current) return;
+    
+    const setupListener = async () => {
+      const unlisten = await listen<string>("chat-disconnected", async (event) => {
+        const disconnectedChannel = event.payload;
+        info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
 
         if (disconnectedChannel === channel) {
-          try {
-            await invoke("connect_to_chat", { channel });
-            info("[useChat] Successfully reconnected");
-          } catch (err) {
-            logError(`[useChat] Failed to reconnect: ${err}`);
+          setIsConnected(false);
+          info("[useChat] Attempting to reconnect...");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          if (disconnectedChannel === channel) {
+            try {
+              await invoke("connect_to_chat", { channel });
+              setIsConnected(true);
+              info("[useChat] Successfully reconnected");
+            } catch (err) {
+              logError(`[useChat] Failed to reconnect: ${err}`);
+            }
           }
         }
+      });
+      disconnectListenerRef.current = unlisten;
+    };
+    
+    setupListener();
+    
+    return () => {
+      if (disconnectListenerRef.current) {
+        disconnectListenerRef.current();
+        disconnectListenerRef.current = null;
       }
-    });
-    return () => { unlisten.then(f => f()); };
+    };
   }, [channel]);
 
   // Track if user manually scrolled
@@ -133,18 +183,19 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   }, []);
 
   const sendMessage = useCallback(async (message: string) => {
-    if (!message.trim() || !isLoggedIn) return;
+    if (!message.trim() || !isLoggedIn || !isConnected) return;
 
     try {
       await invoke("send_chat_message", { message: message.trim() });
     } catch (err) {
       logError(`[useChat] Send message error: ${err}`);
     }
-  }, [isLoggedIn]);
+  }, [isLoggedIn, isConnected]);
 
   return {
     messages,
     isAtBottom,
+    isConnected,
     chatContainerRef,
     chatEndRef,
     sendMessage,

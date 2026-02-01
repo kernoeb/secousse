@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError } from "@tauri-apps/plugin-log";
 import type { TopStream, GetTopStreamsResponse } from "../types";
@@ -12,9 +12,17 @@ interface UseTopStreamsReturn {
 export function useTopStreams(): UseTopStreamsReturn {
   const [topStreams, setTopStreams] = useState<TopStream[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const isLoadingRef = useRef(false);
 
   const loadTopStreams = useCallback(async (isRefresh?: boolean) => {
+    // Guard against concurrent loading
+    if (isLoadingRef.current) {
+      return;
+    }
+    
+    isLoadingRef.current = true;
     info("[useTopStreams] Loading top streams...");
+    
     if (!isRefresh) {
       setIsLoading(true);
     }
@@ -35,6 +43,7 @@ export function useTopStreams(): UseTopStreamsReturn {
       if (!isRefresh) {
         setIsLoading(false);
       }
+      isLoadingRef.current = false;
     }
   }, []);
 
