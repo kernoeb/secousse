@@ -1,0 +1,56 @@
+[package]
+name = "secousse"
+version = "0.1.0"
+description = "An open-source streaming client for Twitch - GPUI Edition"
+authors = ["noewen"]
+edition = "2021"
+
+[dependencies]
+# GPUI Framework
+gpui = { git = "https://github.com/zed-industries/zed", rev = "v0.175.5" }
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+futures-util = "0.3"
+async-channel = "2.3"
+smol = "2.0"
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls"] }
+
+# WebSocket (for IRC chat)
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# URL Handling
+url = "2.5"
+urlencoding = "2.1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Local storage
+dirs = "5.0"
+
+# Image handling
+image = "0.25"
+smallvec = "1.13"
+
+# Platform-specific
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

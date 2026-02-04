@@ -35,3 +35,4 @@ src-tauri/gen/schemas
 # Environment files
 .env
 .env.*
+secousse-gpui/target/
