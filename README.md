@@ -1,69 +1,114 @@
-# Secousse
+# Secousse GPUI
 
-An open-source streaming client for Twitch, built with Tauri 2, React, TypeScript, and Rust.
+A GPU-accelerated Twitch streaming client built with [GPUI](https://gpui.rs/) - the UI framework from Zed.
 
-*Secousse* is French for "twitch" (as in a sudden movement).
+## Prerequisites
 
-![Secousse Screenshot](screenshot.png)
+### macOS
 
-## Features
+1. **Xcode** - Install from the App Store or [developer.apple.com](https://developer.apple.com/xcode/)
 
-- **Live Stream Playback** - HLS video streaming with quality selection
-- **Chat** - Real-time chat with emote support (Twitch, 7TV, BTTV, FFZ)
-- **Authentication** - OAuth login to access your followed channels and send chat messages
-- **Follow/Unfollow** - Manage your followed channels directly from the app
-- **Browse** - Discover top live streams
-- **Search** - Find channels quickly
+2. **Metal Toolchain** - Required for GPUI shader compilation:
+   - Open Xcode
+   - Go to **Xcode > Settings > Components**
+   - Download **Metal Toolchain**
+   
+   Or via command line (may require Xcode to be healthy):
+   ```bash
+   xcodebuild -downloadComponent MetalToolchain
+   ```
 
-## Tech Stack
+3. **Rust** - Install via [rustup](https://rustup.rs/):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
 
-- **Frontend**: React 19, TypeScript, Tailwind CSS
-- **Backend**: Rust with Tauri 2
-- **Video**: HLS.js with custom Tauri loader for CORS bypass
-- **Chat**: IRC WebSocket connection
-- **APIs**: Twitch GQL (public data) + Helix API (authenticated operations)
-
-## Development
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) or [Bun](https://bun.sh/)
-- [Rust](https://rustup.rs/)
-- [Tauri CLI](https://tauri.app/start/prerequisites/)
-
-### Setup
+### Linux (Future)
 
 ```bash
-# Install dependencies
-bun install
+# Ubuntu/Debian
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+    libvulkan-dev libxkbcommon-dev
 
-# Run in development mode
-bun run tauri dev
+# Fedora
+sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel \
+    gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free \
+    vulkan-loader-devel libxkbcommon-devel
+```
 
-# Build for production
-bun run tauri build
+### Windows (Experimental)
+
+- Visual Studio Build Tools
+- GStreamer runtime from [gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/download/)
+
+## Building
+
+```bash
+# Debug build
+cargo build
+
+# Release build
+cargo build --release
+
+# Run
+cargo run
+```
+
+## Environment Variables
+
+If you encounter build issues with Metal/bindgen, try setting:
+
+```bash
+export SDKROOT=$(xcrun --show-sdk-path)
+export PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:$PATH"
+export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
 ```
 
 ## Project Structure
 
 ```
-secousse/
-├── src/                    # React frontend
-│   ├── App.tsx            # Main application component
-│   ├── TauriHlsLoader.ts  # Custom HLS loader for Tauri
-│   └── types.ts           # TypeScript type definitions
-├── src-tauri/             # Rust backend
-│   └── src/
-│       ├── lib.rs         # Tauri commands and app setup
-│       ├── twitch.rs      # Twitch API client (GQL + Helix)
-│       ├── chat.rs        # IRC WebSocket chat handler
-│       └── emotes.rs      # 7TV/BTTV/FFZ emote fetching
-└── package.json
+secousse-gpui/
+├── Cargo.toml          # Dependencies
+├── src/
+│   ├── main.rs         # Entry point
+│   ├── app.rs          # Main application view
+│   ├── theme.rs        # Twitch color palette
+│   ├── actions.rs      # Keyboard shortcuts
+│   ├── api/
+│   │   ├── mod.rs
+│   │   ├── twitch.rs   # Twitch GQL/Helix API
+│   │   ├── emotes.rs   # 7TV/BTTV/FFZ emotes
+│   │   └── chat.rs     # IRC WebSocket
+│   ├── state/
+│   │   ├── mod.rs
+│   │   ├── app_state.rs    # Main app state
+│   │   ├── auth_state.rs   # Authentication
+│   │   └── settings.rs     # Persistent settings
+│   ├── views/
+│   │   ├── mod.rs
+│   │   ├── navbar.rs       # Top navigation
+│   │   └── sidebar.rs      # Followed channels
+│   └── components/
+│       └── mod.rs          # Reusable UI components
+└── assets/
+    └── icons/              # SVG icons
 ```
 
-## Acknowledgments
+## Features (Planned)
 
-This project is inspired by [Xtra](https://github.com/crackededed/Xtra), an excellent open-source Twitch client for Android. Thank you to the Xtra team for their work!
+- [x] Project structure
+- [x] Twitch API client
+- [x] Emote providers (7TV, BTTV, FFZ)
+- [x] IRC chat client
+- [x] Settings persistence
+- [x] Basic UI layout
+- [ ] Video playback (GStreamer)
+- [ ] OAuth authentication flow
+- [ ] Channel search
+- [ ] Browse top streams
+- [ ] Full chat with emotes/badges
+- [ ] Keyboard shortcuts
 
 ## License
 

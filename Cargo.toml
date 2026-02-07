@@ -1,0 +1,72 @@
+[package]
+name = "secousse"
+version = "0.1.0"
+description = "An open-source streaming client for Twitch - GPUI Edition"
+authors = ["noewen"]
+edition = "2024"
+
+[dependencies]
+# GPUI Framework - published crate from crates.io
+gpui = "0.2.2"
+gpui_http_client = "0.2.2"
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+futures-util = "0.3"
+async-channel = "2.3"
+smol = "2.0"
+async-compat = "0.2"
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls", "stream"] }
+bytes = "1"
+
+# WebSocket (for IRC chat)
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# URL Handling
+url = "2.5"
+urlencoding = "2.1"
+
+# Asset bundling (for embedded SVG icons)
+rust-embed = { version = "8.7", features = ["interpolate-folder-path"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+anyhow = "1.0"
+thiserror = "2"
+open = "5.3"
+parking_lot = "0.12"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Local storage
+dirs = "5.0"
+
+# GStreamer for video playback (copied from gpui-video-player)
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+gstreamer-base = "0.24"
+gstreamer-video = "0.24"
+glib = "0.21"
+
+# HTTP types (re-exported by gpui_http_client, but needed for our HttpClient impl)
+http = "1"
+
+# Platform-specific
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+core-video = "0.4"
+core-foundation = "0.10"
