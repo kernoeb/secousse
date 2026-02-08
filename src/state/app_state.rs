@@ -1,10 +1,6 @@
 //! Main application state
-#![allow(dead_code)]
 //!
 //! Contains the root state that holds references to all sub-states.
-
-use super::{AuthState, Settings};
-use gpui::Entity;
 
 /// Active navigation tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,12 +26,6 @@ pub struct AppState {
 
     /// Whether video is in fullscreen mode
     pub is_fullscreen: bool,
-
-    /// Authentication state entity
-    pub auth: Entity<AuthState>,
-
-    /// Application settings entity
-    pub settings: Entity<Settings>,
 
     /// List of followed channels (cached)
     pub followed_channels: Vec<FollowedChannel>,
@@ -81,20 +71,13 @@ pub struct FollowedChannel {
 
 impl AppState {
     /// Create a new app state with the given sub-entities
-    pub fn new(
-        auth: Entity<AuthState>,
-        settings: Entity<Settings>,
-        is_sidebar_open: bool,
-        is_chat_open: bool,
-    ) -> Self {
+    pub fn new(is_sidebar_open: bool, is_chat_open: bool) -> Self {
         Self {
             current_channel: None,
             active_tab: ActiveTab::default(),
             is_sidebar_open,
             is_chat_open,
             is_fullscreen: false,
-            auth,
-            settings,
             followed_channels: Vec::new(),
             is_loading_followed: false,
             top_streams: Vec::new(),
@@ -138,11 +121,6 @@ impl AppState {
         self.is_loading_followed = false;
     }
 
-    /// Get online followed channels count
-    pub fn online_followed_count(&self) -> usize {
-        self.followed_channels.iter().filter(|c| c.is_live).count()
-    }
-
     /// Update top streams list
     pub fn set_top_streams(&mut self, streams: Vec<FollowedChannel>) {
         self.top_streams = streams;
@@ -153,11 +131,6 @@ impl AppState {
     /// Check if browse tab needs to fetch data
     pub fn needs_browse_fetch(&self) -> bool {
         (!self.browse_loaded || self.top_streams.is_empty()) && !self.is_loading_browse
-    }
-
-    /// Set search query
-    pub fn set_search_query(&mut self, query: String) {
-        self.search_query = query;
     }
 
     /// Set search results

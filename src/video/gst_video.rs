@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::video::error::Error;
 use gst::message::MessageView;
 use gstreamer as gst;
@@ -9,39 +7,9 @@ use gstreamer_video as gst_video;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-
-/// Position in the media.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Position {
-    /// Position based on time.
-    Time(Duration),
-    /// Position based on nth frame.
-    Frame(u64),
-}
-
-impl From<Position> for gst::GenericFormattedValue {
-    fn from(pos: Position) -> Self {
-        match pos {
-            Position::Time(t) => gst::ClockTime::from_nseconds(t.as_nanos() as _).into(),
-            Position::Frame(f) => gst::format::Default::from_u64(f).into(),
-        }
-    }
-}
-
-impl From<Duration> for Position {
-    fn from(t: Duration) -> Self {
-        Position::Time(t)
-    }
-}
-
-impl From<u64> for Position {
-    fn from(f: u64) -> Self {
-        Position::Frame(f)
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct Frame(gst::Sample);
@@ -49,10 +17,6 @@ pub(crate) struct Frame(gst::Sample);
 impl Frame {
     pub fn empty() -> Self {
         Self(gst::Sample::builder().build())
-    }
-
-    pub fn readable(&'_ self) -> Option<gst::BufferMap<'_, gst::buffer::Readable>> {
-        self.0.buffer().and_then(|x| x.map_readable().ok())
     }
 }
 
@@ -78,11 +42,11 @@ pub fn warmup_gstreamer() {
             return;
         }
 
-        if let Ok(pipeline) = gst::parse::launch("fakesrc num-buffers=1 ! fakesink") {
-            if let Ok(pipeline) = pipeline.downcast::<gst::Pipeline>() {
-                let _ = pipeline.set_state(gst::State::Playing);
-                let _ = pipeline.set_state(gst::State::Null);
-            }
+        if let Ok(pipeline) = gst::parse::launch("fakesrc num-buffers=1 ! fakesink")
+            && let Ok(pipeline) = pipeline.downcast::<gst::Pipeline>()
+        {
+            let _ = pipeline.set_state(gst::State::Playing);
+            let _ = pipeline.set_state(gst::State::Null);
         }
     });
 }
@@ -98,10 +62,7 @@ impl Default for VideoOptions {
 }
 
 #[derive(Debug)]
-#[allow(unused)]
 pub(crate) struct Internal {
-    pub(crate) id: u64,
-    pub(crate) bus: gst::Bus,
     pub(crate) source: gst::Pipeline,
     pub(crate) alive: Arc<AtomicBool>,
     pub(crate) worker: Option<std::thread::JoinHandle<()>>,
@@ -109,24 +70,13 @@ pub(crate) struct Internal {
     pub(crate) width: i32,
     pub(crate) height: i32,
     pub(crate) framerate: f64,
-    pub(crate) duration: Duration,
-    pub(crate) speed: Arc<AtomicU64>,
-
     // Stride information for NV12 format
     pub(crate) y_stride: i32,
     pub(crate) uv_stride: i32,
 
     pub(crate) frame: Arc<Mutex<Frame>>,
     pub(crate) upload_frame: Arc<AtomicBool>,
-    pub(crate) frame_buffer: Arc<Mutex<VecDeque<Frame>>>,
-    pub(crate) frame_buffer_capacity: Arc<AtomicUsize>,
-    pub(crate) last_frame_time: Arc<Mutex<Instant>>,
-    pub(crate) looping: Arc<AtomicBool>,
     pub(crate) is_eos: Arc<AtomicBool>,
-    pub(crate) restart_stream: bool,
-
-    pub(crate) subtitle_text: Arc<Mutex<Option<String>>>,
-    pub(crate) upload_text: Arc<AtomicBool>,
 
     // Optional display size overrides. If only one is set, the other is
     // inferred using the natural aspect ratio (width / height).
@@ -135,91 +85,6 @@ pub(crate) struct Internal {
 }
 
 impl Internal {
-    pub(crate) fn seek(&self, position: impl Into<Position>, accurate: bool) -> Result<(), Error> {
-        let position = position.into();
-        let current_speed = f64::from_bits(self.speed.load(Ordering::SeqCst));
-
-        // Clear EOS so the worker resumes pulling after a seek.
-        self.is_eos.store(false, Ordering::SeqCst);
-
-        // Build seek flags. When not accurate, snap in the playback direction to
-        // avoid jumping backward to a previous keyframe.
-        let mut flags = gst::SeekFlags::FLUSH;
-        if accurate {
-            flags |= gst::SeekFlags::ACCURATE;
-        } else {
-            flags |= gst::SeekFlags::KEY_UNIT;
-            if current_speed >= 0.0 {
-                flags |= gst::SeekFlags::SNAP_AFTER;
-            } else {
-                flags |= gst::SeekFlags::SNAP_BEFORE;
-            }
-        }
-
-        match &position {
-            Position::Time(_) => self.source.seek(
-                current_speed,
-                flags,
-                gst::SeekType::Set,
-                gst::GenericFormattedValue::from(position),
-                gst::SeekType::None,
-                gst::ClockTime::NONE,
-            )?,
-            Position::Frame(_) => self.source.seek(
-                current_speed,
-                flags,
-                gst::SeekType::Set,
-                gst::GenericFormattedValue::from(position),
-                gst::SeekType::None,
-                gst::format::Default::NONE,
-            )?,
-        };
-
-        *self.subtitle_text.lock() = None;
-        self.upload_text.store(true, Ordering::SeqCst);
-
-        // Clear any buffered frames so old frames do not display after a seek,
-        // which can visually appear as a larger-than-intended jump.
-        self.frame_buffer.lock().clear();
-        self.upload_frame.store(false, Ordering::SeqCst);
-
-        Ok(())
-    }
-
-    pub(crate) fn set_speed(&mut self, speed: f64) -> Result<(), Error> {
-        let Some(position) = self.source.query_position::<gst::ClockTime>() else {
-            return Err(Error::Caps);
-        };
-        if speed > 0.0 {
-            self.source.seek(
-                speed,
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::SeekType::Set,
-                position,
-                gst::SeekType::End,
-                gst::ClockTime::from_seconds(0),
-            )?;
-        } else {
-            self.source.seek(
-                speed,
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::SeekType::Set,
-                gst::ClockTime::from_seconds(0),
-                gst::SeekType::Set,
-                position,
-            )?;
-        }
-        self.speed.store(speed.to_bits(), Ordering::SeqCst);
-        Ok(())
-    }
-
-    pub(crate) fn restart_stream(&mut self) -> Result<(), Error> {
-        self.is_eos.store(false, Ordering::SeqCst);
-        self.set_paused(false);
-        self.seek(0, false)?;
-        Ok(())
-    }
-
     pub(crate) fn set_paused(&mut self, paused: bool) {
         self.source
             .set_state(if paused {
@@ -228,10 +93,6 @@ impl Internal {
                 gst::State::Playing
             })
             .unwrap(/* state was changed in ctor; state errors caught there */);
-
-        if self.is_eos.load(Ordering::Acquire) && !paused {
-            self.restart_stream = true;
-        }
     }
 
     pub(crate) fn paused(&self) -> bool {
@@ -268,11 +129,6 @@ impl Drop for Video {
 }
 
 impl Video {
-    /// Create a new video player from a given video which loads from `uri`.
-    pub fn new(uri: &url::Url) -> Result<Self, Error> {
-        Self::new_with_options(uri, VideoOptions::default())
-    }
-
     /// Create a new video player from a given video which loads from `uri`,
     /// applying initialization options.
     pub fn new_with_options(uri: &url::Url, options: VideoOptions) -> Result<Self, Error> {
@@ -298,20 +154,6 @@ impl Video {
         let video_sink = video_sink.downcast::<gst_app::AppSink>().unwrap();
 
         Self::from_gst_pipeline_with_options(pipeline, video_sink, None, options)
-    }
-
-    /// Creates a new video based on an existing GStreamer pipeline and appsink.
-    pub fn from_gst_pipeline(
-        pipeline: gst::Pipeline,
-        video_sink: gst_app::AppSink,
-        text_sink: Option<gst_app::AppSink>,
-    ) -> Result<Self, Error> {
-        Self::from_gst_pipeline_with_options(
-            pipeline,
-            video_sink,
-            text_sink,
-            VideoOptions::default(),
-        )
     }
 
     /// Creates a new video based on an existing GStreamer pipeline and appsink,
@@ -386,18 +228,9 @@ impl Video {
             log::info!("[Video] Using framerate: {} fps", framerate);
             (width, height, framerate, y_stride, uv_stride)
         } else {
-            log::warn!(
-                "[Video] Caps not ready after startup, using defaults until first frame"
-            );
+            log::warn!("[Video] Caps not ready after startup, using defaults until first frame");
             (1, 1, 30.0, 1, 1)
         };
-
-        let duration = Duration::from_nanos(
-            pipeline
-                .query_duration::<gst::ClockTime>()
-                .map(|duration| duration.nseconds())
-                .unwrap_or(0),
-        );
 
         let frame = Arc::new(Mutex::new(Frame::empty()));
         let upload_frame = Arc::new(AtomicBool::new(false));
@@ -622,8 +455,6 @@ impl Video {
         }
 
         Ok(Video(Arc::new(RwLock::new(Internal {
-            id,
-            bus: pipeline.bus().unwrap(),
             source: pipeline,
             alive,
             worker: Some(worker),
@@ -631,22 +462,12 @@ impl Video {
             width,
             height,
             framerate,
-            duration,
-            speed: speed_state,
             y_stride,
             uv_stride,
 
             frame,
             upload_frame,
-            frame_buffer,
-            frame_buffer_capacity,
-            last_frame_time,
-            looping: looping_flag,
             is_eos,
-            restart_stream: false,
-
-            subtitle_text,
-            upload_text,
 
             display_width_override: None,
             display_height_override: None,
@@ -659,44 +480,6 @@ impl Video {
 
     pub(crate) fn write(&'_ self) -> parking_lot::RwLockWriteGuard<'_, Internal> {
         self.0.write()
-    }
-
-    /// Get the size/resolution of the video as `(width, height)`.
-    pub fn size(&self) -> (i32, i32) {
-        (self.read().width, self.read().height)
-    }
-
-    /// Get the natural aspect ratio (width / height) of the video as f32.
-    pub fn aspect_ratio(&self) -> f32 {
-        let (w, h) = self.size();
-        if w <= 0 || h <= 0 {
-            return 1.0;
-        }
-        w as f32 / h as f32
-    }
-
-    /// Set an override display width in pixels. Pass `None` to clear.
-    pub fn set_display_width(&self, width: Option<u32>) {
-        self.write().display_width_override = width;
-    }
-
-    /// Set an override display height in pixels. Pass `None` to clear.
-    pub fn set_display_height(&self, height: Option<u32>) {
-        self.write().display_height_override = height;
-    }
-
-    /// Set override display size in pixels. Any value set to `None` is cleared.
-    pub fn set_display_size(&self, width: Option<u32>, height: Option<u32>) {
-        let mut inner = self.write();
-        inner.display_width_override = width;
-        inner.display_height_override = height;
-    }
-
-    /// Get the stride information for NV12 planes.
-    /// Returns (y_stride, uv_stride) in bytes.
-    pub fn strides(&self) -> (u32, u32) {
-        let inner = self.read();
-        (inner.y_stride as u32, inner.uv_stride as u32)
     }
 
     /// Get the effective display size honoring overrides. If only one of
@@ -730,11 +513,6 @@ impl Video {
         }
     }
 
-    /// Get the framerate of the video as frames per second.
-    pub fn framerate(&self) -> f64 {
-        self.read().framerate
-    }
-
     /// Set the volume multiplier of the audio.
     pub fn set_volume(&self, volume: f64) {
         {
@@ -743,11 +521,6 @@ impl Video {
         }
         let muted = self.muted();
         self.set_muted(muted);
-    }
-
-    /// Get the volume multiplier of the audio.
-    pub fn volume(&self) -> f64 {
-        self.read().source.property("volume")
     }
 
     /// Set if the audio is muted or not.
@@ -765,16 +538,6 @@ impl Video {
         self.read().is_eos.load(Ordering::Acquire)
     }
 
-    /// Get if the media will loop or not.
-    pub fn looping(&self) -> bool {
-        self.read().looping.load(Ordering::SeqCst)
-    }
-
-    /// Set if the media will loop or not.
-    pub fn set_looping(&self, looping: bool) {
-        self.write().looping.store(looping, Ordering::SeqCst);
-    }
-
     /// Set if the media is paused or not.
     pub fn set_paused(&self, paused: bool) {
         self.write().set_paused(paused)
@@ -783,68 +546,6 @@ impl Video {
     /// Get if the media is paused or not.
     pub fn paused(&self) -> bool {
         self.read().paused()
-    }
-
-    /// Jumps to a specific position in the media.
-    pub fn seek(&self, position: impl Into<Position>, accurate: bool) -> Result<(), Error> {
-        self.write().seek(position, accurate)
-    }
-
-    /// Set the playback speed of the media.
-    pub fn set_speed(&self, speed: f64) -> Result<(), Error> {
-        self.write().set_speed(speed)
-    }
-
-    /// Get the current playback speed.
-    pub fn speed(&self) -> f64 {
-        f64::from_bits(self.read().speed.load(Ordering::SeqCst))
-    }
-
-    /// Get the current playback position in time.
-    pub fn position(&self) -> Duration {
-        Duration::from_nanos(
-            self.read()
-                .source
-                .query_position::<gst::ClockTime>()
-                .map_or(0, |pos| pos.nseconds()),
-        )
-    }
-
-    /// Get the media duration.
-    pub fn duration(&self) -> Duration {
-        self.read().duration
-    }
-
-    /// Restarts a stream.
-    pub fn restart_stream(&self) -> Result<(), Error> {
-        self.write().restart_stream()
-    }
-
-    /// Get the underlying GStreamer pipeline.
-    pub fn pipeline(&self) -> gst::Pipeline {
-        self.read().source.clone()
-    }
-
-    /// Get the current NV12 frame data if available.
-    /// Returns (data, width, height, y_stride, uv_stride)
-    pub fn current_frame_data(&self) -> Option<(Vec<u8>, u32, u32, u32, u32)> {
-        let inner = self.read();
-
-        // Check if we have frame data available
-        if let Some(readable) = inner.frame.lock().readable() {
-            let data = readable.as_slice().to_vec();
-            if !data.is_empty() {
-                return Some((
-                    data,
-                    inner.width as u32,
-                    inner.height as u32,
-                    inner.y_stride as u32,
-                    inner.uv_stride as u32,
-                ));
-            }
-        }
-
-        None
     }
 
     /// Take the current GStreamer sample without copying.
@@ -880,15 +581,15 @@ impl Video {
         };
 
         let mut inner = self.write();
-        if let Ok(width) = s.get::<i32>("width") {
-            if width > 0 {
-                inner.width = width;
-            }
+        if let Ok(width) = s.get::<i32>("width")
+            && width > 0
+        {
+            inner.width = width;
         }
-        if let Ok(height) = s.get::<i32>("height") {
-            if height > 0 {
-                inner.height = height;
-            }
+        if let Ok(height) = s.get::<i32>("height")
+            && height > 0
+        {
+            inner.height = height;
         }
 
         if let Ok(framerate) = s.get::<gst::Fraction>("framerate") {
@@ -915,50 +616,5 @@ impl Video {
     /// Returns true if a new frame arrived since last check and resets the flag.
     pub fn take_frame_ready(&self) -> bool {
         self.read().upload_frame.swap(false, Ordering::SeqCst)
-    }
-
-    /// Configure the frame buffer capacity (0 disables buffering).
-    pub fn set_frame_buffer_capacity(&self, capacity: usize) {
-        let inner = self.read();
-        inner
-            .frame_buffer_capacity
-            .store(capacity, Ordering::SeqCst);
-        if capacity == 0 {
-            inner.frame_buffer.lock().clear();
-        } else {
-            let mut buf = inner.frame_buffer.lock();
-            while buf.len() > capacity {
-                buf.pop_front();
-            }
-        }
-    }
-
-    /// Retrieve the current frame buffer capacity.
-    pub fn frame_buffer_capacity(&self) -> usize {
-        self.read().frame_buffer_capacity.load(Ordering::SeqCst)
-    }
-
-    /// Pop the oldest buffered frame, returning raw NV12 bytes with width/height/strides.
-    /// Returns None if the buffer is empty or mapping fails.
-    /// Returns (data, width, height, y_stride, uv_stride)
-    pub fn pop_buffered_frame(&self) -> Option<(Vec<u8>, u32, u32, u32, u32)> {
-        let (width, height) = self.size();
-        let (y_stride, uv_stride) = self.strides();
-        let inner = self.read();
-        let maybe_frame = inner.frame_buffer.lock().pop_front();
-        if let Some(frame) = maybe_frame
-            && let Some(readable) = frame.readable()
-        {
-            let data = readable.as_slice().to_vec();
-            if !data.is_empty() {
-                return Some((data, width as u32, height as u32, y_stride, uv_stride));
-            }
-        }
-        None
-    }
-
-    /// Number of frames currently buffered.
-    pub fn buffered_len(&self) -> usize {
-        self.read().frame_buffer.lock().len()
     }
 }

@@ -1,7 +1,6 @@
 //! Third-party emote providers (7TV, BTTV, FFZ)
 //!
 //! Fetches emotes from various emote services for enhanced chat experience.
-#![allow(dead_code, clippy::collapsible_if)]
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -52,10 +51,10 @@ fn load_cache(path: &PathBuf, ttl_secs: u64) -> Option<Vec<Emote>> {
 }
 
 fn save_cache(path: &PathBuf, emotes: &[Emote]) {
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
     }
 
     let cache = EmoteCache {
@@ -116,27 +115,27 @@ pub async fn fetch_7tv_emotes(channel_id: &str) -> Vec<Emote> {
     let client = reqwest::Client::new();
     let mut emotes = Vec::new();
 
-    if let Ok(res) = client.get(&url).send().await {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            if let Some(set) = json.get("emote_set").and_then(|s| s.get("emotes")) {
-                if let Some(list) = set.as_array() {
-                    for e in list {
-                        let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let host_url = e
-                            .get("data")
-                            .and_then(|d| d.get("host"))
-                            .and_then(|h| h.get("url"))
-                            .and_then(|u| u.as_str())
-                            .unwrap_or("");
+    if let Ok(res) = client.get(&url).send().await
+        && let Ok(json) = res.json::<serde_json::Value>().await
+        && let Some(list) = json
+            .get("emote_set")
+            .and_then(|s| s.get("emotes"))
+            .and_then(|set| set.as_array())
+    {
+        for e in list {
+            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let host_url = e
+                .get("data")
+                .and_then(|d| d.get("host"))
+                .and_then(|h| h.get("url"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("");
 
-                        if !name.is_empty() && !host_url.is_empty() {
-                            emotes.push(Emote {
-                                name: name.to_string(),
-                                url: format!("https:{}/2x.webp", host_url),
-                            });
-                        }
-                    }
-                }
+            if !name.is_empty() && !host_url.is_empty() {
+                emotes.push(Emote {
+                    name: name.to_string(),
+                    url: format!("https:{}/2x.webp", host_url),
+                });
             }
         }
     }
@@ -154,35 +153,35 @@ pub async fn fetch_bttv_emotes(channel_id: &str) -> Vec<Emote> {
         channel_id
     );
 
-    if let Ok(res) = client.get(&url).send().await {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            // Channel emotes
-            if let Some(channel_emotes) = json.get("channelEmotes").and_then(|e| e.as_array()) {
-                for e in channel_emotes {
-                    let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
+    if let Ok(res) = client.get(&url).send().await
+        && let Ok(json) = res.json::<serde_json::Value>().await
+    {
+        // Channel emotes
+        if let Some(channel_emotes) = json.get("channelEmotes").and_then(|e| e.as_array()) {
+            for e in channel_emotes {
+                let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
 
-                    if !id.is_empty() && !code.is_empty() {
-                        emotes.push(Emote {
-                            name: code.to_string(),
-                            url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
-                        });
-                    }
+                if !id.is_empty() && !code.is_empty() {
+                    emotes.push(Emote {
+                        name: code.to_string(),
+                        url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
+                    });
                 }
             }
+        }
 
-            // Shared emotes
-            if let Some(shared_emotes) = json.get("sharedEmotes").and_then(|e| e.as_array()) {
-                for e in shared_emotes {
-                    let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
+        // Shared emotes
+        if let Some(shared_emotes) = json.get("sharedEmotes").and_then(|e| e.as_array()) {
+            for e in shared_emotes {
+                let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
 
-                    if !id.is_empty() && !code.is_empty() {
-                        emotes.push(Emote {
-                            name: code.to_string(),
-                            url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
-                        });
-                    }
+                if !id.is_empty() && !code.is_empty() {
+                    emotes.push(Emote {
+                        name: code.to_string(),
+                        url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
+                    });
                 }
             }
         }
@@ -198,31 +197,29 @@ pub async fn fetch_ffz_emotes(channel_id: &str) -> Vec<Emote> {
 
     let url = format!("https://api.frankerfacez.com/v1/room/id/{}", channel_id);
 
-    if let Ok(res) = client.get(&url).send().await {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            if let Some(sets) = json.get("sets").and_then(|s| s.as_object()) {
-                for set in sets.values() {
-                    if let Some(emoticons) = set.get("emoticons").and_then(|e| e.as_array()) {
-                        for e in emoticons {
-                            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            let urls = e.get("urls").and_then(|u| u.as_object());
+    if let Ok(res) = client.get(&url).send().await
+        && let Ok(json) = res.json::<serde_json::Value>().await
+        && let Some(sets) = json.get("sets").and_then(|s| s.as_object())
+    {
+        for set in sets.values() {
+            if let Some(emoticons) = set.get("emoticons").and_then(|e| e.as_array()) {
+                for e in emoticons {
+                    let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let urls = e.get("urls").and_then(|u| u.as_object());
 
-                            if !name.is_empty() {
-                                if let Some(u) = urls
-                                    .and_then(|u| u.get("2").or(u.get("1")))
-                                    .and_then(|v| v.as_str())
-                                {
-                                    emotes.push(Emote {
-                                        name: name.to_string(),
-                                        url: if u.starts_with("http") {
-                                            u.to_string()
-                                        } else {
-                                            format!("https:{}", u)
-                                        },
-                                    });
-                                }
-                            }
-                        }
+                    if !name.is_empty()
+                        && let Some(u) = urls
+                            .and_then(|u| u.get("2").or(u.get("1")))
+                            .and_then(|v| v.as_str())
+                    {
+                        emotes.push(Emote {
+                            name: name.to_string(),
+                            url: if u.starts_with("http") {
+                                u.to_string()
+                            } else {
+                                format!("https:{}", u)
+                            },
+                        });
                     }
                 }
             }
@@ -241,25 +238,23 @@ async fn fetch_7tv_global_emotes() -> Vec<Emote> {
         .get("https://7tv.io/v3/emote-sets/global")
         .send()
         .await
+        && let Ok(json) = res.json::<serde_json::Value>().await
+        && let Some(list) = json.get("emotes").and_then(|e| e.as_array())
     {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            if let Some(list) = json.get("emotes").and_then(|e| e.as_array()) {
-                for e in list {
-                    let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let host_url = e
-                        .get("data")
-                        .and_then(|d| d.get("host"))
-                        .and_then(|h| h.get("url"))
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("");
+        for e in list {
+            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let host_url = e
+                .get("data")
+                .and_then(|d| d.get("host"))
+                .and_then(|h| h.get("url"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("");
 
-                    if !name.is_empty() && !host_url.is_empty() {
-                        emotes.push(Emote {
-                            name: name.to_string(),
-                            url: format!("https:{}/2x.webp", host_url),
-                        });
-                    }
-                }
+            if !name.is_empty() && !host_url.is_empty() {
+                emotes.push(Emote {
+                    name: name.to_string(),
+                    url: format!("https:{}/2x.webp", host_url),
+                });
             }
         }
     }
@@ -276,20 +271,18 @@ async fn fetch_bttv_global_emotes() -> Vec<Emote> {
         .get("https://api.betterttv.net/3/cached/emotes/global")
         .send()
         .await
+        && let Ok(json) = res.json::<serde_json::Value>().await
+        && let Some(list) = json.as_array()
     {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            if let Some(list) = json.as_array() {
-                for e in list {
-                    let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
+        for e in list {
+            let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let code = e.get("code").and_then(|v| v.as_str()).unwrap_or("");
 
-                    if !id.is_empty() && !code.is_empty() {
-                        emotes.push(Emote {
-                            name: code.to_string(),
-                            url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
-                        });
-                    }
-                }
+            if !id.is_empty() && !code.is_empty() {
+                emotes.push(Emote {
+                    name: code.to_string(),
+                    url: format!("https://cdn.betterttv.net/emote/{}/2x.webp", id),
+                });
             }
         }
     }

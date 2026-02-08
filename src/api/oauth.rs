@@ -1,7 +1,6 @@
 //! OAuth authentication flow
 //!
 //! Handles Twitch OAuth login by opening browser and receiving callback.
-#![allow(clippy::manual_pattern_char_comparison)]
 
 use anyhow::{Result, anyhow};
 use log::{error, info};
@@ -225,7 +224,7 @@ fn parse_oauth_callback(request: &str) -> Option<String> {
     if let Some(start) = request.find("access_token=") {
         let start = start + "access_token=".len();
         let end = request[start..]
-            .find(|c: char| c == '&' || c == ' ' || c == '\r' || c == '\n')
+            .find(|c: char| ['&', ' ', '\r', '\n'].contains(&c))
             .map(|i| start + i)
             .unwrap_or(request.len());
 

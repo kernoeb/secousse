@@ -1,7 +1,6 @@
 //! Persistent settings storage
 //!
 //! Handles loading and saving user preferences to disk.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -15,13 +14,6 @@ pub struct Settings {
     /// OAuth access token
     pub access_token: Option<String>,
 
-    /// Last watched channel
-    pub last_channel: Option<String>,
-
-    /// Volume level (0.0 - 1.0)
-    #[serde(default = "default_volume")]
-    pub volume: f64,
-
     /// Whether sidebar is expanded
     #[serde(default = "default_true")]
     pub sidebar_open: bool,
@@ -29,31 +21,10 @@ pub struct Settings {
     /// Whether chat panel is visible
     #[serde(default = "default_true")]
     pub chat_open: bool,
-
-    /// Preferred video quality (e.g., "auto", "1080p60", "720p60")
-    #[serde(default = "default_quality")]
-    pub video_quality: String,
-
-    /// Whether to auto-play streams when selecting a channel
-    #[serde(default = "default_true")]
-    pub auto_play: bool,
-
-    /// Chat message buffer size
-    #[serde(default = "default_chat_buffer")]
-    pub chat_buffer_size: usize,
 }
 
-fn default_volume() -> f64 {
-    0.5
-}
 fn default_true() -> bool {
     true
-}
-fn default_quality() -> String {
-    "auto".to_string()
-}
-fn default_chat_buffer() -> usize {
-    500
 }
 
 impl Default for Settings {
@@ -61,13 +32,8 @@ impl Default for Settings {
         Self {
             device_id: None,
             access_token: None,
-            last_channel: None,
-            volume: default_volume(),
             sidebar_open: true,
             chat_open: true,
-            video_quality: default_quality(),
-            auto_play: true,
-            chat_buffer_size: default_chat_buffer(),
         }
     }
 }
@@ -151,41 +117,5 @@ impl Settings {
     pub fn set_access_token(&mut self, token: Option<String>) {
         self.access_token = token;
         let _ = self.save();
-    }
-
-    /// Update last channel and save
-    pub fn set_last_channel(&mut self, channel: Option<String>) {
-        self.last_channel = channel;
-        let _ = self.save();
-    }
-
-    /// Update volume and save
-    pub fn set_volume(&mut self, volume: f64) {
-        self.volume = volume.clamp(0.0, 1.0);
-        let _ = self.save();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_settings() {
-        let settings = Settings::default();
-        assert_eq!(settings.volume, 0.5);
-        assert!(settings.sidebar_open);
-        assert!(settings.chat_open);
-    }
-
-    #[test]
-    fn test_device_id_generation() {
-        let mut settings = Settings::default();
-        let id = settings.get_or_create_device_id();
-        assert_eq!(id.len(), 32);
-
-        // Should return same ID on subsequent calls
-        let id2 = settings.get_or_create_device_id();
-        assert_eq!(id, id2);
     }
 }

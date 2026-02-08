@@ -2,27 +2,29 @@
 //!
 //! This is the root view that contains the entire application layout.
 
+use gpui::Corner;
 use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, StyledImage};
 use gpui::*;
-use gpui::Corner;
 use log::{error, info};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::actions;
-use crate::api::{start_oauth_flow, StreamQuality, TwitchClient};
+use crate::api::{StreamQuality, TwitchClient, start_oauth_flow};
 use crate::state::{ActiveTab, AppState, AuthState, FollowedChannel, Settings};
 use crate::theme;
 use crate::video::{Video, VideoOptions};
 use crate::views::{ChatView, ChatViewEvent, NavbarEvent, NavbarView, SidebarEvent, SidebarView};
-use async_compat::Compat;
 use async_channel::bounded;
-use futures::future::{select, Either};
+use async_compat::Compat;
 use futures::FutureExt;
+use futures::future::{Either, select};
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::popover::Popover;
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_component::{v_virtual_list, Disableable, Icon, IconName, Selectable, Sizable, VirtualListScrollHandle};
+use gpui_component::{
+    Disableable, Icon, IconName, Selectable, Sizable, VirtualListScrollHandle, v_virtual_list,
+};
 
 /// The root application view
 pub struct SecousseApp {
@@ -97,14 +99,7 @@ impl SecousseApp {
         let settings_entity = cx.new(|_| settings.clone());
 
         // Create main app state
-        let app_state = cx.new(|_| {
-            AppState::new(
-                auth_state.clone(),
-                settings_entity.clone(),
-                settings.sidebar_open,
-                settings.chat_open,
-            )
-        });
+        let app_state = cx.new(|_| AppState::new(settings.sidebar_open, settings.chat_open));
 
         // Create Twitch client
         let twitch_client = Arc::new(std::sync::Mutex::new(TwitchClient::new(
@@ -182,19 +177,21 @@ impl SecousseApp {
                 .default_value(1.0)
         });
 
-        cx.subscribe_in(&volume_slider, window, |this, state, event: &SliderEvent, window, cx| {
-            let value = match event {
-                SliderEvent::Change(value) => value,
-            };
-            let raw = value.start() as f64;
-            let snapped = if raw >= 0.95 { 1.0 } else { raw };
-            this.set_volume(snapped, cx);
-            if (snapped - raw).abs() > f64::EPSILON {
-                state.update(cx, |state, cx| {
-                    state.set_value(SliderValue::from(snapped as f32), window, cx);
-                });
-            }
-        })
+        cx.subscribe_in(
+            &volume_slider,
+            window,
+            |this, state, event: &SliderEvent, window, cx| {
+                let SliderEvent::Change(value) = event;
+                let raw = value.start() as f64;
+                let snapped = if raw >= 0.95 { 1.0 } else { raw };
+                this.set_volume(snapped, cx);
+                if (snapped - raw).abs() > f64::EPSILON {
+                    state.update(cx, |state, cx| {
+                        state.set_value(SliderValue::from(snapped as f32), window, cx);
+                    });
+                }
+            },
+        )
         .detach();
 
         let app = Self {
@@ -249,144 +246,19 @@ impl SecousseApp {
             auth.is_validating = true;
         });
 
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let token = cx
-                .update(|cx: &mut App| auth.read(cx).access_token.clone())
-                .ok()
-                .flatten();
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let token = cx
+                    .update(|cx: &mut App| auth.read(cx).access_token.clone())
+                    .ok()
+                    .flatten();
 
-            let device_id = cx
-                .update(|cx: &mut App| auth.read(cx).device_id.clone())
-                .unwrap_or_default();
+                let device_id = cx
+                    .update(|cx: &mut App| auth.read(cx).device_id.clone())
+                    .unwrap_or_default();
 
-            if let Some(token) = token {
-                // Validate token by getting self info
-                let api_client = TwitchClient::new(Some(token.clone()), Some(device_id.clone()));
-
-                let user_info_result = Compat::new(api_client.get_self_info()).await;
-
-                match user_info_result {
-                    Ok(user_info) => {
-                        info!("Token validated for user: {}", user_info.display_name);
-                        let user_id = user_info.id.clone();
-
-                        // Update auth state
-                        let _ = cx.update(|cx: &mut App| {
-                            auth.update(cx, |auth, _| {
-                                auth.set_logged_in(
-                                    token.clone(),
-                                    crate::state::auth_state::SelfInfo {
-                                        id: user_info.id.clone(),
-                                        login: user_info.login.clone(),
-                                        display_name: user_info.display_name.clone(),
-                                        profile_image_url: user_info.profile_image_url.clone(),
-                                    },
-                                );
-                            });
-                        });
-
-                        // Update twitch client
-                        if let Ok(mut c) = client.lock() {
-                            c.set_access_token(Some(token.clone()));
-                        }
-
-                        // Mark as loading before fetching
-                        let _ = cx.update(|cx: &mut App| {
-                            app_state.update(cx, |state, _| {
-                                state.is_loading_followed = true;
-                            });
-                        });
-
-                        // Fetch followed channels
-                        info!("Fetching followed channels for user {}", user_id);
-                        let api_client = TwitchClient::new(Some(token), Some(device_id));
-                        let followed_result =
-                            Compat::new(api_client.get_followed_live_streams(&user_id)).await;
-
-                        match followed_result {
-                            Ok(channels) => {
-                                info!("Found {} followed channels", channels.len());
-                                let followed: Vec<FollowedChannel> = channels
-                                    .into_iter()
-                                    .map(|c| FollowedChannel {
-                                        id: c.user.id,
-                                        login: c.user.login,
-                                        display_name: c.user.display_name,
-                                        profile_image_url: c.user.profile_image_url,
-                                        is_live: c.stream.is_some(),
-                                        viewer_count: c.stream.as_ref().map(|s| s.viewer_count),
-                                        game_name: c
-                                            .stream
-                                            .as_ref()
-                                            .and_then(|s| s.game_name.clone()),
-                                        stream_title: c.stream.as_ref().and_then(|s| {
-                                            if s.title.is_empty() {
-                                                None
-                                            } else {
-                                                Some(s.title.clone())
-                                            }
-                                        }),
-                                        thumbnail_url: c
-                                            .stream
-                                            .as_ref()
-                                            .and_then(|s| s.thumbnail_url.clone()),
-                                    })
-                                    .collect();
-
-                                let _ = cx.update(|cx: &mut App| {
-                                    app_state.update(cx, |state, cx| {
-                                        state.set_followed_channels(followed);
-                                        cx.notify();
-                                    });
-                                });
-                            }
-                            Err(e) => {
-                                error!("Failed to fetch followed channels: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Token validation failed: {}", e);
-
-                        let _ = cx.update(|cx: &mut App| {
-                            auth.update(cx, |auth, _| {
-                                auth.logout();
-                            });
-
-                            settings.update(cx, |settings, _| {
-                                settings.set_access_token(None);
-                            });
-                        });
-                    }
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Start OAuth login flow
-    fn start_login(&self, cx: &mut Context<Self>) {
-        let auth = self.auth_state.clone();
-        let settings = self.settings.clone();
-        let app_state = self.app_state.clone();
-        let client = self.twitch_client.clone();
-
-        info!("Starting OAuth login flow...");
-
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            // Run OAuth flow in blocking thread (it opens browser and waits)
-            let result = smol::unblock(start_oauth_flow).await;
-
-            match result {
-                Ok(token) => {
-                    info!("OAuth login successful!");
-
-                    // Get device ID
-                    let device_id = cx
-                        .update(|cx: &mut App| auth.read(cx).device_id.clone())
-                        .unwrap_or_default();
-
-                    // Validate token and get user info
+                if let Some(token) = token {
+                    // Validate token by getting self info
                     let api_client =
                         TwitchClient::new(Some(token.clone()), Some(device_id.clone()));
 
@@ -394,7 +266,7 @@ impl SecousseApp {
 
                     match user_info_result {
                         Ok(user_info) => {
-                            info!("Logged in as: {}", user_info.display_name);
+                            info!("Token validated for user: {}", user_info.display_name);
                             let user_id = user_info.id.clone();
 
                             // Update auth state
@@ -409,11 +281,6 @@ impl SecousseApp {
                                             profile_image_url: user_info.profile_image_url.clone(),
                                         },
                                     );
-                                });
-
-                                // Save token to settings
-                                settings.update(cx, |settings, _| {
-                                    settings.set_access_token(Some(token.clone()));
                                 });
                             });
 
@@ -430,6 +297,7 @@ impl SecousseApp {
                             });
 
                             // Fetch followed channels
+                            info!("Fetching followed channels for user {}", user_id);
                             let api_client = TwitchClient::new(Some(token), Some(device_id));
                             let followed_result =
                                 Compat::new(api_client.get_followed_live_streams(&user_id)).await;
@@ -477,15 +345,155 @@ impl SecousseApp {
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get user info after login: {}", e);
+                            error!("Token validation failed: {}", e);
+
+                            let _ = cx.update(|cx: &mut App| {
+                                auth.update(cx, |auth, _| {
+                                    auth.logout();
+                                });
+
+                                settings.update(cx, |settings, _| {
+                                    settings.set_access_token(None);
+                                });
+                            });
                         }
                     }
                 }
-                Err(e) => {
-                    error!("OAuth login failed: {}", e);
+            },
+        )
+        .detach();
+    }
+
+    /// Start OAuth login flow
+    fn start_login(&self, cx: &mut Context<Self>) {
+        let auth = self.auth_state.clone();
+        let settings = self.settings.clone();
+        let app_state = self.app_state.clone();
+        let client = self.twitch_client.clone();
+
+        info!("Starting OAuth login flow...");
+
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                // Run OAuth flow in blocking thread (it opens browser and waits)
+                let result = smol::unblock(start_oauth_flow).await;
+
+                match result {
+                    Ok(token) => {
+                        info!("OAuth login successful!");
+
+                        // Get device ID
+                        let device_id = cx
+                            .update(|cx: &mut App| auth.read(cx).device_id.clone())
+                            .unwrap_or_default();
+
+                        // Validate token and get user info
+                        let api_client =
+                            TwitchClient::new(Some(token.clone()), Some(device_id.clone()));
+
+                        let user_info_result = Compat::new(api_client.get_self_info()).await;
+
+                        match user_info_result {
+                            Ok(user_info) => {
+                                info!("Logged in as: {}", user_info.display_name);
+                                let user_id = user_info.id.clone();
+
+                                // Update auth state
+                                let _ = cx.update(|cx: &mut App| {
+                                    auth.update(cx, |auth, _| {
+                                        auth.set_logged_in(
+                                            token.clone(),
+                                            crate::state::auth_state::SelfInfo {
+                                                id: user_info.id.clone(),
+                                                login: user_info.login.clone(),
+                                                display_name: user_info.display_name.clone(),
+                                                profile_image_url: user_info
+                                                    .profile_image_url
+                                                    .clone(),
+                                            },
+                                        );
+                                    });
+
+                                    // Save token to settings
+                                    settings.update(cx, |settings, _| {
+                                        settings.set_access_token(Some(token.clone()));
+                                    });
+                                });
+
+                                // Update twitch client
+                                if let Ok(mut c) = client.lock() {
+                                    c.set_access_token(Some(token.clone()));
+                                }
+
+                                // Mark as loading before fetching
+                                let _ = cx.update(|cx: &mut App| {
+                                    app_state.update(cx, |state, _| {
+                                        state.is_loading_followed = true;
+                                    });
+                                });
+
+                                // Fetch followed channels
+                                let api_client = TwitchClient::new(Some(token), Some(device_id));
+                                let followed_result =
+                                    Compat::new(api_client.get_followed_live_streams(&user_id))
+                                        .await;
+
+                                match followed_result {
+                                    Ok(channels) => {
+                                        info!("Found {} followed channels", channels.len());
+                                        let followed: Vec<FollowedChannel> = channels
+                                            .into_iter()
+                                            .map(|c| FollowedChannel {
+                                                id: c.user.id,
+                                                login: c.user.login,
+                                                display_name: c.user.display_name,
+                                                profile_image_url: c.user.profile_image_url,
+                                                is_live: c.stream.is_some(),
+                                                viewer_count: c
+                                                    .stream
+                                                    .as_ref()
+                                                    .map(|s| s.viewer_count),
+                                                game_name: c
+                                                    .stream
+                                                    .as_ref()
+                                                    .and_then(|s| s.game_name.clone()),
+                                                stream_title: c.stream.as_ref().and_then(|s| {
+                                                    if s.title.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(s.title.clone())
+                                                    }
+                                                }),
+                                                thumbnail_url: c
+                                                    .stream
+                                                    .as_ref()
+                                                    .and_then(|s| s.thumbnail_url.clone()),
+                                            })
+                                            .collect();
+
+                                        let _ = cx.update(|cx: &mut App| {
+                                            app_state.update(cx, |state, cx| {
+                                                state.set_followed_channels(followed);
+                                                cx.notify();
+                                            });
+                                        });
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to fetch followed channels: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to get user info after login: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("OAuth login failed: {}", e);
+                    }
                 }
-            }
-        })
+            },
+        )
         .detach();
     }
 
@@ -507,181 +515,24 @@ impl SecousseApp {
             state.search_active = true;
         });
 
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            // Get the client config
-            let (access_token, device_id) = {
-                let guard = client.lock().ok();
-                guard
-                    .map(|c| (c.access_token.clone(), c.device_id().to_string()))
-                    .unwrap_or((None, String::new()))
-            };
-
-            // Search
-            let api_client = TwitchClient::new(access_token, Some(device_id));
-            let search_result = Compat::new(api_client.search_channels(&query)).await;
-
-            match search_result {
-                Ok(channels) => {
-                    info!("Search returned {} results", channels.len());
-                    let results: Vec<FollowedChannel> = channels
-                        .into_iter()
-                        .map(|c| FollowedChannel {
-                            id: c.user.id,
-                            login: c.user.login,
-                            display_name: c.user.display_name,
-                            profile_image_url: c.user.profile_image_url,
-                            is_live: c.stream.is_some(),
-                            viewer_count: c.stream.as_ref().map(|s| s.viewer_count),
-                            game_name: c.stream.as_ref().and_then(|s| s.game_name.clone()),
-                            stream_title: c.stream.as_ref().and_then(|s| {
-                                if s.title.is_empty() {
-                                    None
-                                } else {
-                                    Some(s.title.clone())
-                                }
-                            }),
-                            thumbnail_url: c.stream.as_ref().and_then(|s| s.thumbnail_url.clone()),
-                        })
-                        .collect();
-
-                    let _ = cx.update(|cx: &mut App| {
-                        app_state.update(cx, |state, cx| {
-                            state.set_search_results(results);
-                            cx.notify();
-                        });
-                    });
-                }
-                Err(e) => {
-                    error!("Search failed: {}", e);
-                    let _ = cx.update(|cx: &mut App| {
-                        app_state.update(cx, |state, cx| {
-                            state.is_searching = false;
-                            cx.notify();
-                        });
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Fetch top streams for Browse tab if not already loaded
-    fn fetch_browse_if_needed(&self, cx: &mut Context<Self>) {
-        let needs_fetch = self.app_state.read(cx).needs_browse_fetch();
-        if !needs_fetch {
-            info!("Browse data already loaded, skipping fetch");
-            return;
-        }
-
-        info!("Fetching top streams for Browse tab...");
-
-        let app_state = self.app_state.clone();
-        let client = self.twitch_client.clone();
-
-        // Mark as loading
-        app_state.update(cx, |state, _| {
-            state.is_loading_browse = true;
-        });
-
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            // Get the client config
-            let (access_token, device_id) = {
-                let guard = client.lock().ok();
-                guard
-                    .map(|c| (c.access_token.clone(), c.device_id().to_string()))
-                    .unwrap_or((None, String::new()))
-            };
-
-            // Fetch top streams
-            let api_client = TwitchClient::new(access_token, Some(device_id));
-            let streams_result = Compat::new(api_client.get_top_streams(50)).await;
-
-            match streams_result {
-                Ok(streams) => {
-                    info!("Fetched {} top streams", streams.len());
-                    let top_streams: Vec<FollowedChannel> = streams
-                        .into_iter()
-                        .map(|c| FollowedChannel {
-                            id: c.user.id,
-                            login: c.user.login,
-                            display_name: c.user.display_name,
-                            profile_image_url: c.user.profile_image_url,
-                            is_live: c.stream.is_some(),
-                            viewer_count: c.stream.as_ref().map(|s| s.viewer_count),
-                            game_name: c.stream.as_ref().and_then(|s| s.game_name.clone()),
-                            stream_title: c.stream.as_ref().and_then(|s| {
-                                if s.title.is_empty() {
-                                    None
-                                } else {
-                                    Some(s.title.clone())
-                                }
-                            }),
-                            thumbnail_url: c.stream.as_ref().and_then(|s| s.thumbnail_url.clone()),
-                        })
-                        .collect();
-
-                    let _ = cx.update(|cx: &mut App| {
-                        app_state.update(cx, |state, cx| {
-                            state.set_top_streams(top_streams);
-                            cx.notify();
-                        });
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to fetch top streams: {}", e);
-                    let _ = cx.update(|cx: &mut App| {
-                        app_state.update(cx, |state, _| {
-                            state.is_loading_browse = false;
-                        });
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Start auto-refresh loop for followed channels
-    fn start_followed_refresh_loop(&self, cx: &mut Context<Self>) {
-        let app_state = self.app_state.clone();
-        let auth_state = self.auth_state.clone();
-
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            loop {
-                smol::Timer::after(Duration::from_secs(60)).await;
-
-                let state = cx
-                    .update(|cx: &mut App| {
-                        let auth = auth_state.read(cx);
-                        let is_logged_in = auth.is_logged_in;
-                        let user_id = auth.user_id().map(str::to_string);
-                        let device_id = auth.device_id.clone();
-                        let access_token = auth.access_token.clone();
-                        let is_loading = app_state.read(cx).is_loading_followed;
-                        (is_logged_in, user_id, device_id, access_token, is_loading)
-                    })
-                    .ok();
-
-                let Some((is_logged_in, user_id, device_id, access_token, is_loading)) = state
-                else {
-                    break;
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                // Get the client config
+                let (access_token, device_id) = {
+                    let guard = client.lock().ok();
+                    guard
+                        .map(|c| (c.access_token.clone(), c.device_id().to_string()))
+                        .unwrap_or((None, String::new()))
                 };
 
-                if !is_logged_in || user_id.is_none() || is_loading {
-                    continue;
-                }
-
-                let user_id = user_id.unwrap();
-
-                // Silent refresh: don't set is_loading_followed so existing data stays visible
-
+                // Search
                 let api_client = TwitchClient::new(access_token, Some(device_id));
-                let followed_result =
-                    Compat::new(api_client.get_followed_live_streams(&user_id)).await;
+                let search_result = Compat::new(api_client.search_channels(&query)).await;
 
-                match followed_result {
+                match search_result {
                     Ok(channels) => {
-                        info!("Auto-refreshed {} followed channels", channels.len());
-                        let followed: Vec<FollowedChannel> = channels
+                        info!("Search returned {} results", channels.len());
+                        let results: Vec<FollowedChannel> = channels
                             .into_iter()
                             .map(|c| FollowedChannel {
                                 id: c.user.id,
@@ -707,49 +558,47 @@ impl SecousseApp {
 
                         let _ = cx.update(|cx: &mut App| {
                             app_state.update(cx, |state, cx| {
-                                state.set_followed_channels(followed);
+                                state.set_search_results(results);
                                 cx.notify();
                             });
                         });
                     }
                     Err(e) => {
-                        error!("Failed to auto-refresh followed channels: {}", e);
+                        error!("Search failed: {}", e);
+                        let _ = cx.update(|cx: &mut App| {
+                            app_state.update(cx, |state, cx| {
+                                state.is_searching = false;
+                                cx.notify();
+                            });
+                        });
                     }
                 }
-            }
-        })
+            },
+        )
         .detach();
     }
 
-    /// Start auto-refresh loop for Browse tab
-    fn start_browse_refresh_loop(&self, cx: &mut Context<Self>) {
+    /// Fetch top streams for Browse tab if not already loaded
+    fn fetch_browse_if_needed(&self, cx: &mut Context<Self>) {
+        let needs_fetch = self.app_state.read(cx).needs_browse_fetch();
+        if !needs_fetch {
+            info!("Browse data already loaded, skipping fetch");
+            return;
+        }
+
+        info!("Fetching top streams for Browse tab...");
+
         let app_state = self.app_state.clone();
         let client = self.twitch_client.clone();
 
-        cx.spawn(async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            loop {
-                smol::Timer::after(Duration::from_secs(60)).await;
+        // Mark as loading
+        app_state.update(cx, |state, _| {
+            state.is_loading_browse = true;
+        });
 
-                let state = cx
-                    .update(|cx: &mut App| {
-                        let app = app_state.read(cx);
-                        let should_refresh =
-                            app.active_tab == ActiveTab::Browse && !app.is_loading_browse;
-                        let search_active = app.search_active;
-                        (should_refresh, search_active)
-                    })
-                    .ok();
-
-                let Some((should_refresh, search_active)) = state else {
-                    break;
-                };
-
-                if !should_refresh || search_active {
-                    continue;
-                }
-
-                // Silent refresh: don't set is_loading_browse so existing data stays visible
-
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                // Get the client config
                 let (access_token, device_id) = {
                     let guard = client.lock().ok();
                     guard
@@ -757,12 +606,13 @@ impl SecousseApp {
                         .unwrap_or((None, String::new()))
                 };
 
+                // Fetch top streams
                 let api_client = TwitchClient::new(access_token, Some(device_id));
                 let streams_result = Compat::new(api_client.get_top_streams(50)).await;
 
                 match streams_result {
                     Ok(streams) => {
-                        info!("Auto-refreshed {} top streams", streams.len());
+                        info!("Fetched {} top streams", streams.len());
                         let top_streams: Vec<FollowedChannel> = streams
                             .into_iter()
                             .map(|c| FollowedChannel {
@@ -795,11 +645,183 @@ impl SecousseApp {
                         });
                     }
                     Err(e) => {
-                        error!("Failed to auto-refresh top streams: {}", e);
+                        error!("Failed to fetch top streams: {}", e);
+                        let _ = cx.update(|cx: &mut App| {
+                            app_state.update(cx, |state, _| {
+                                state.is_loading_browse = false;
+                            });
+                        });
                     }
                 }
-            }
-        })
+            },
+        )
+        .detach();
+    }
+
+    /// Start auto-refresh loop for followed channels
+    fn start_followed_refresh_loop(&self, cx: &mut Context<Self>) {
+        let app_state = self.app_state.clone();
+        let auth_state = self.auth_state.clone();
+
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    smol::Timer::after(Duration::from_secs(60)).await;
+
+                    let state = cx
+                        .update(|cx: &mut App| {
+                            let auth = auth_state.read(cx);
+                            let is_logged_in = auth.is_logged_in;
+                            let user_id = auth.user_id().map(str::to_string);
+                            let device_id = auth.device_id.clone();
+                            let access_token = auth.access_token.clone();
+                            let is_loading = app_state.read(cx).is_loading_followed;
+                            (is_logged_in, user_id, device_id, access_token, is_loading)
+                        })
+                        .ok();
+
+                    let Some((is_logged_in, user_id, device_id, access_token, is_loading)) = state
+                    else {
+                        break;
+                    };
+
+                    if !is_logged_in || user_id.is_none() || is_loading {
+                        continue;
+                    }
+
+                    let user_id = user_id.unwrap();
+
+                    // Silent refresh: don't set is_loading_followed so existing data stays visible
+
+                    let api_client = TwitchClient::new(access_token, Some(device_id));
+                    let followed_result =
+                        Compat::new(api_client.get_followed_live_streams(&user_id)).await;
+
+                    match followed_result {
+                        Ok(channels) => {
+                            info!("Auto-refreshed {} followed channels", channels.len());
+                            let followed: Vec<FollowedChannel> = channels
+                                .into_iter()
+                                .map(|c| FollowedChannel {
+                                    id: c.user.id,
+                                    login: c.user.login,
+                                    display_name: c.user.display_name,
+                                    profile_image_url: c.user.profile_image_url,
+                                    is_live: c.stream.is_some(),
+                                    viewer_count: c.stream.as_ref().map(|s| s.viewer_count),
+                                    game_name: c.stream.as_ref().and_then(|s| s.game_name.clone()),
+                                    stream_title: c.stream.as_ref().and_then(|s| {
+                                        if s.title.is_empty() {
+                                            None
+                                        } else {
+                                            Some(s.title.clone())
+                                        }
+                                    }),
+                                    thumbnail_url: c
+                                        .stream
+                                        .as_ref()
+                                        .and_then(|s| s.thumbnail_url.clone()),
+                                })
+                                .collect();
+
+                            let _ = cx.update(|cx: &mut App| {
+                                app_state.update(cx, |state, cx| {
+                                    state.set_followed_channels(followed);
+                                    cx.notify();
+                                });
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to auto-refresh followed channels: {}", e);
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Start auto-refresh loop for Browse tab
+    fn start_browse_refresh_loop(&self, cx: &mut Context<Self>) {
+        let app_state = self.app_state.clone();
+        let client = self.twitch_client.clone();
+
+        cx.spawn(
+            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    smol::Timer::after(Duration::from_secs(60)).await;
+
+                    let state = cx
+                        .update(|cx: &mut App| {
+                            let app = app_state.read(cx);
+                            let should_refresh =
+                                app.active_tab == ActiveTab::Browse && !app.is_loading_browse;
+                            let search_active = app.search_active;
+                            (should_refresh, search_active)
+                        })
+                        .ok();
+
+                    let Some((should_refresh, search_active)) = state else {
+                        break;
+                    };
+
+                    if !should_refresh || search_active {
+                        continue;
+                    }
+
+                    // Silent refresh: don't set is_loading_browse so existing data stays visible
+
+                    let (access_token, device_id) = {
+                        let guard = client.lock().ok();
+                        guard
+                            .map(|c| (c.access_token.clone(), c.device_id().to_string()))
+                            .unwrap_or((None, String::new()))
+                    };
+
+                    let api_client = TwitchClient::new(access_token, Some(device_id));
+                    let streams_result = Compat::new(api_client.get_top_streams(50)).await;
+
+                    match streams_result {
+                        Ok(streams) => {
+                            info!("Auto-refreshed {} top streams", streams.len());
+                            let top_streams: Vec<FollowedChannel> = streams
+                                .into_iter()
+                                .map(|c| FollowedChannel {
+                                    id: c.user.id,
+                                    login: c.user.login,
+                                    display_name: c.user.display_name,
+                                    profile_image_url: c.user.profile_image_url,
+                                    is_live: c.stream.is_some(),
+                                    viewer_count: c.stream.as_ref().map(|s| s.viewer_count),
+                                    game_name: c.stream.as_ref().and_then(|s| s.game_name.clone()),
+                                    stream_title: c.stream.as_ref().and_then(|s| {
+                                        if s.title.is_empty() {
+                                            None
+                                        } else {
+                                            Some(s.title.clone())
+                                        }
+                                    }),
+                                    thumbnail_url: c
+                                        .stream
+                                        .as_ref()
+                                        .and_then(|s| s.thumbnail_url.clone()),
+                                })
+                                .collect();
+
+                            let _ = cx.update(|cx: &mut App| {
+                                app_state.update(cx, |state, cx| {
+                                    state.set_top_streams(top_streams);
+                                    cx.notify();
+                                });
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to auto-refresh top streams: {}", e);
+                        }
+                    }
+                }
+            },
+        )
         .detach();
     }
 
@@ -835,199 +857,207 @@ impl SecousseApp {
         let client = self.twitch_client.clone();
         let login = login.to_string();
 
-        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let start = Instant::now();
-            // Get the client config
-            let (access_token, device_id) = {
-                let guard = client.lock().ok();
-                guard
-                    .map(|c| (c.access_token.clone(), c.device_id().to_string()))
-                    .unwrap_or((None, String::new()))
-            };
+        cx.spawn(
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let start = Instant::now();
+                // Get the client config
+                let (access_token, device_id) = {
+                    let guard = client.lock().ok();
+                    guard
+                        .map(|c| (c.access_token.clone(), c.device_id().to_string()))
+                        .unwrap_or((None, String::new()))
+                };
 
-            // Get playback access token
-            let api_client = TwitchClient::new(access_token.clone(), Some(device_id.clone()));
-            let token_result = Compat::new(api_client.get_playback_access_token(&login)).await;
+                // Get playback access token
+                let api_client = TwitchClient::new(access_token.clone(), Some(device_id.clone()));
+                let token_result = Compat::new(api_client.get_playback_access_token(&login)).await;
 
-            match token_result {
-                Ok(token) => {
-                    // Construct the master HLS URL
-                    let api_client =
-                        TwitchClient::new(access_token.clone(), Some(device_id.clone()));
-                    let master_url = api_client.get_usher_url(&login, &token);
-                    info!("Got master HLS URL: {}", master_url);
-
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            this.master_playlist_url = Some(master_url.clone());
-                            this.stream_qualities.clear();
-                            this.selected_quality_index = 0;
-                            this.quality_auto = true;
-                            this.quality_manual_override = false;
-                            this.current_stream_url = None;
-                            this.awaiting_quality_auto_switch = false;
-                            cx.notify();
-                        })
-                        .ok();
-                    });
-
-                    let qualities_master = master_url.clone();
-                    let qualities_access_token = access_token.clone();
-                    let qualities_device_id = device_id.clone();
-                    let qualities_this = this.clone();
-                    let (qualities_tx, qualities_rx) = bounded::<Vec<StreamQuality>>(1);
-                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                match token_result {
+                    Ok(token) => {
+                        // Construct the master HLS URL
                         let api_client =
-                            TwitchClient::new(qualities_access_token, Some(qualities_device_id));
-                        let qualities_result =
-                            Compat::new(api_client.get_stream_qualities(&qualities_master)).await;
+                            TwitchClient::new(access_token.clone(), Some(device_id.clone()));
+                        let master_url = api_client.get_usher_url(&login, &token);
+                        info!("Got master HLS URL: {}", master_url);
 
-                        match qualities_result {
-                            Ok(q) if !q.is_empty() => {
-                                let _ = qualities_tx.send(q.clone()).await;
-                                info!("Found {} quality options", q.len());
-                                for (i, quality) in q.iter().enumerate() {
-                                    info!(
-                                        "  Quality {}: {} ({})",
-                                        i,
-                                        quality.name,
-                                        quality.display_name()
-                                    );
+                        let _ = cx.update(|cx: &mut App| {
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                this.master_playlist_url = Some(master_url.clone());
+                                this.stream_qualities.clear();
+                                this.selected_quality_index = 0;
+                                this.quality_auto = true;
+                                this.quality_manual_override = false;
+                                this.current_stream_url = None;
+                                this.awaiting_quality_auto_switch = false;
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+
+                        let qualities_master = master_url.clone();
+                        let qualities_access_token = access_token.clone();
+                        let qualities_device_id = device_id.clone();
+                        let qualities_this = this.clone();
+                        let (qualities_tx, qualities_rx) = bounded::<Vec<StreamQuality>>(1);
+                        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                            let api_client = TwitchClient::new(
+                                qualities_access_token,
+                                Some(qualities_device_id),
+                            );
+                            let qualities_result =
+                                Compat::new(api_client.get_stream_qualities(&qualities_master))
+                                    .await;
+
+                            match qualities_result {
+                                Ok(q) if !q.is_empty() => {
+                                    let _ = qualities_tx.send(q.clone()).await;
+                                    info!("Found {} quality options", q.len());
+                                    for (i, quality) in q.iter().enumerate() {
+                                        info!(
+                                            "  Quality {}: {} ({})",
+                                            i,
+                                            quality.name,
+                                            quality.display_name()
+                                        );
+                                    }
+
+                                    let _ = cx.update(|cx: &mut App| {
+                                        qualities_this
+                                            .update(cx, |this: &mut SecousseApp, cx| {
+                                                this.stream_qualities = q;
+                                                this.selected_quality_index = 0;
+                                                let should_switch = this
+                                                    .awaiting_quality_auto_switch
+                                                    && this.quality_auto
+                                                    && !this.quality_manual_override;
+                                                if should_switch {
+                                                    this.switch_quality_auto(cx);
+                                                    this.awaiting_quality_auto_switch = false;
+                                                }
+                                                cx.notify();
+                                            })
+                                            .ok();
+                                    });
                                 }
+                                Ok(_) => {
+                                    info!("No qualities found, using master playlist directly");
+                                }
+                                Err(e) => {
+                                    error!("Failed to fetch qualities: {}", e);
+                                }
+                            }
+                        })
+                        .detach();
+                        let mut stream_url = master_url.clone();
+                        let timeout = smol::Timer::after(Duration::from_millis(250)).fuse();
+                        let qualities_wait = qualities_rx.recv().fuse();
+                        futures::pin_mut!(timeout, qualities_wait);
 
+                        match select(qualities_wait, timeout).await {
+                            Either::Left((Ok(q), _)) if !q.is_empty() => {
+                                stream_url = q[0].url.clone();
+                            }
+                            _ => {}
+                        }
+
+                        info!("Using stream URL: {}", stream_url);
+
+                        let intended_url = stream_url.clone();
+                        let _ = cx.update(|cx: &mut App| {
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                this.current_stream_url = Some(intended_url.clone());
+                                this.awaiting_quality_auto_switch =
+                                    this.master_playlist_url.as_deref()
+                                        == Some(intended_url.as_str());
+                                if this.awaiting_quality_auto_switch
+                                    && !this.stream_qualities.is_empty()
+                                    && this.quality_auto
+                                    && !this.quality_manual_override
+                                {
+                                    this.switch_quality_auto(cx);
+                                    this.awaiting_quality_auto_switch = false;
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+
+                        // Parse the URL first
+                        let uri = match url::Url::parse(&stream_url) {
+                            Ok(uri) => uri,
+                            Err(e) => {
+                                error!("Failed to parse stream URL: {}", e);
+                                return;
+                            }
+                        };
+
+                        // Create video player in background thread to avoid blocking main thread
+                        // Video::new_with_options() blocks while waiting for GStreamer pipeline
+                        info!("Creating video player in background thread...");
+                        let video_result = smol::unblock(move || {
+                            info!("Background thread: starting GStreamer pipeline creation");
+                            let options = VideoOptions {
+                                frame_buffer_capacity: Some(0),
+                                looping: Some(false),
+                                speed: Some(1.0),
+                            };
+                            let result = Video::new_with_options(&uri, options);
+                            info!("Background thread: GStreamer pipeline creation finished");
+                            result
+                        })
+                        .await;
+
+                        // Store the video on main thread
+                        match video_result {
+                            Ok(video) => {
+                                info!("Video player created successfully");
                                 let _ = cx.update(|cx: &mut App| {
-                                    qualities_this.update(cx, |this: &mut SecousseApp, cx| {
-                                        this.stream_qualities = q;
-                                        this.selected_quality_index = 0;
-                                        let should_switch = this.awaiting_quality_auto_switch
-                                            && this.quality_auto
-                                            && !this.quality_manual_override;
-                                        if should_switch {
-                                            this.switch_quality_auto(cx);
-                                            this.awaiting_quality_auto_switch = false;
-                                        }
+                                    this.update(cx, |this: &mut SecousseApp, cx| {
+                                        // Apply current volume settings to new video
+                                        video.set_volume(this.volume);
+                                        video.set_muted(this.is_muted);
+                                        this.current_stream_url = Some(stream_url.clone());
+                                        this.video = Some(video);
+                                        this.stream_error = None;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                });
+                                info!("Playback ready after {}ms", start.elapsed().as_millis());
+                            }
+                            Err(e) => {
+                                error!("Failed to create video player: {:?}", e);
+                                let _ = cx.update(|cx: &mut App| {
+                                    this.update(cx, |this: &mut SecousseApp, cx| {
+                                        this.stream_error =
+                                            Some(format!("Failed to load stream: {}", e));
                                         cx.notify();
                                     })
                                     .ok();
                                 });
                             }
-                            Ok(_) => {
-                                info!("No qualities found, using master playlist directly");
-                            }
-                            Err(e) => {
-                                error!("Failed to fetch qualities: {}", e);
-                            }
                         }
-                    })
-                    .detach();
-                    let mut stream_url = master_url.clone();
-                    let timeout = smol::Timer::after(Duration::from_millis(250)).fuse();
-                    let qualities_wait = qualities_rx.recv().fuse();
-                    futures::pin_mut!(timeout, qualities_wait);
-
-                    match select(qualities_wait, timeout).await {
-                        Either::Left((Ok(q), _)) if !q.is_empty() => {
-                            stream_url = q[0].url.clone();
-                        }
-                        _ => {}
                     }
-
-                    info!("Using stream URL: {}", stream_url);
-
-                    let intended_url = stream_url.clone();
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            this.current_stream_url = Some(intended_url.clone());
-                            this.awaiting_quality_auto_switch =
-                                this.master_playlist_url.as_deref() == Some(intended_url.as_str());
-                            if this.awaiting_quality_auto_switch
-                                && !this.stream_qualities.is_empty()
-                                && this.quality_auto
-                                && !this.quality_manual_override
-                            {
-                                this.switch_quality_auto(cx);
-                                this.awaiting_quality_auto_switch = false;
-                            }
-                            cx.notify();
-                        })
-                        .ok();
-                    });
-
-                    // Parse the URL first
-                    let uri = match url::Url::parse(&stream_url) {
-                        Ok(uri) => uri,
-                        Err(e) => {
-                            error!("Failed to parse stream URL: {}", e);
-                            return;
-                        }
-                    };
-
-                    // Create video player in background thread to avoid blocking main thread
-                    // Video::new_with_options() blocks while waiting for GStreamer pipeline
-                    info!("Creating video player in background thread...");
-                    let video_result = smol::unblock(move || {
-                        info!("Background thread: starting GStreamer pipeline creation");
-                        let options = VideoOptions {
-                            frame_buffer_capacity: Some(0),
-                            looping: Some(false),
-                            speed: Some(1.0),
+                    Err(e) => {
+                        error!("Failed to get playback token: {}", e);
+                        let error_msg = if e.to_string().contains("GQL Error")
+                            || e.to_string().contains("null")
+                        {
+                            "Channel is offline".to_string()
+                        } else {
+                            format!("Failed to load stream: {}", e)
                         };
-                        let result = Video::new_with_options(&uri, options);
-                        info!("Background thread: GStreamer pipeline creation finished");
-                        result
-                    })
-                    .await;
-
-                    // Store the video on main thread
-                    match video_result {
-                        Ok(video) => {
-                            info!("Video player created successfully");
-                            let _ = cx.update(|cx: &mut App| {
+                        let _ = cx.update(|cx: &mut App| {
                             this.update(cx, |this: &mut SecousseApp, cx| {
-                                // Apply current volume settings to new video
-                                video.set_volume(this.volume);
-                                video.set_muted(this.is_muted);
-                                this.current_stream_url = Some(stream_url.clone());
-                                this.video = Some(video);
-                                this.stream_error = None;
+                                this.stream_error = Some(error_msg);
                                 cx.notify();
                             })
                             .ok();
-                            });
-                            info!("Playback ready after {}ms", start.elapsed().as_millis());
-                        }
-                        Err(e) => {
-                            error!("Failed to create video player: {:?}", e);
-                            let _ = cx.update(|cx: &mut App| {
-                                this.update(cx, |this: &mut SecousseApp, cx| {
-                                    this.stream_error =
-                                        Some(format!("Failed to load stream: {}", e));
-                                    cx.notify();
-                                })
-                                .ok();
-                            });
-                        }
+                        });
                     }
                 }
-                Err(e) => {
-                    error!("Failed to get playback token: {}", e);
-                    let error_msg = if e.to_string().contains("GQL Error")
-                        || e.to_string().contains("null")
-                    {
-                        "Channel is offline".to_string()
-                    } else {
-                        format!("Failed to load stream: {}", e)
-                    };
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            this.stream_error = Some(error_msg);
-                            cx.notify();
-                        })
-                        .ok();
-                    });
-                }
-            }
-        })
+            },
+        )
         .detach();
     }
 
@@ -1077,45 +1107,47 @@ impl SecousseApp {
         cx.notify();
 
         // Create new video with selected quality
-        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let uri = match url::Url::parse(&stream_url) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    error!("Failed to parse stream URL: {}", e);
-                    return;
-                }
-            };
-
-            info!("Creating video player for quality switch...");
-            let video_result = smol::unblock(move || {
-                let options = VideoOptions {
-                    frame_buffer_capacity: Some(0),
-                    looping: Some(false),
-                    speed: Some(1.0),
+        cx.spawn(
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let uri = match url::Url::parse(&stream_url) {
+                    Ok(uri) => uri,
+                    Err(e) => {
+                        error!("Failed to parse stream URL: {}", e);
+                        return;
+                    }
                 };
-                Video::new_with_options(&uri, options)
-            })
-            .await;
 
-            match video_result {
-                Ok(video) => {
-                    info!("Quality switch successful");
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            // Apply current volume settings to new video
-                            video.set_volume(this.volume);
-                            video.set_muted(this.is_muted);
-                            this.video = Some(video);
-                            cx.notify();
-                        })
-                        .ok();
-                    });
+                info!("Creating video player for quality switch...");
+                let video_result = smol::unblock(move || {
+                    let options = VideoOptions {
+                        frame_buffer_capacity: Some(0),
+                        looping: Some(false),
+                        speed: Some(1.0),
+                    };
+                    Video::new_with_options(&uri, options)
+                })
+                .await;
+
+                match video_result {
+                    Ok(video) => {
+                        info!("Quality switch successful");
+                        let _ = cx.update(|cx: &mut App| {
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                // Apply current volume settings to new video
+                                video.set_volume(this.volume);
+                                video.set_muted(this.is_muted);
+                                this.video = Some(video);
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to switch quality: {:?}", e);
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to switch quality: {:?}", e);
-                }
-            }
-        })
+            },
+        )
         .detach();
     }
 
@@ -1139,53 +1171,55 @@ impl SecousseApp {
         self.video = None;
         cx.notify();
 
-        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let uri = match url::Url::parse(&stream_url) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    error!("Failed to parse stream URL: {}", e);
-                    return;
-                }
-            };
+        cx.spawn(
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let uri = match url::Url::parse(&stream_url) {
+                    Ok(uri) => uri,
+                    Err(e) => {
+                        error!("Failed to parse stream URL: {}", e);
+                        return;
+                    }
+                };
 
-            info!("Creating video player for auto quality...");
-            let video_result = smol::unblock(move || {
-                Video::new_with_options(
-                    &uri,
-                    VideoOptions {
-                        frame_buffer_capacity: Some(0),
-                        looping: Some(false),
-                        speed: Some(1.0),
-                    },
-                )
-            })
-            .await;
+                info!("Creating video player for auto quality...");
+                let video_result = smol::unblock(move || {
+                    Video::new_with_options(
+                        &uri,
+                        VideoOptions {
+                            frame_buffer_capacity: Some(0),
+                            looping: Some(false),
+                            speed: Some(1.0),
+                        },
+                    )
+                })
+                .await;
 
-            match video_result {
-                Ok(video) => {
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            video.set_volume(this.volume);
-                            video.set_muted(this.is_muted);
-                            this.video = Some(video);
-                            this.stream_error = None;
-                            cx.notify();
-                        })
-                        .ok();
-                    });
+                match video_result {
+                    Ok(video) => {
+                        let _ = cx.update(|cx: &mut App| {
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                video.set_volume(this.volume);
+                                video.set_muted(this.is_muted);
+                                this.video = Some(video);
+                                this.stream_error = None;
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to switch to auto quality: {:?}", e);
+                        let _ = cx.update(|cx: &mut App| {
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                this.stream_error = Some(format!("Failed to load stream: {}", e));
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to switch to auto quality: {:?}", e);
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            this.stream_error = Some(format!("Failed to load stream: {}", e));
-                            cx.notify();
-                        })
-                        .ok();
-                    });
-                }
-            }
-        })
+            },
+        )
         .detach();
     }
 
@@ -1204,15 +1238,12 @@ impl SecousseApp {
         };
 
         // Resolve channel ID for emote fetching (from followed/top/search lists)
-        let channel_id = self
-            .current_channel_info(&channel, cx)
-            .map(|c| c.id);
+        let channel_id = self.current_channel_info(&channel, cx).map(|c| c.id);
 
         // Create chat view with emote support
         let chat_channel = channel.clone();
-        let chat_view = cx.new(|cx| {
-            ChatView::new(chat_channel, channel_id, access_token, username, window, cx)
-        });
+        let chat_view = cx
+            .new(|cx| ChatView::new(chat_channel, channel_id, access_token, username, window, cx));
         cx.subscribe(&chat_view, |this, _chat, event, cx| {
             if let ChatViewEvent::CloseRequested = event {
                 this.app_state.update(cx, |state, cx| {
@@ -1313,27 +1344,30 @@ impl SecousseApp {
 
         self.follow_in_flight = true;
 
-        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let api_client = TwitchClient::new(Some(access_token), Some(device_id));
-            let result = Compat::new(api_client.check_follow_status(&user_id, &channel_id)).await;
+        cx.spawn(
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let api_client = TwitchClient::new(Some(access_token), Some(device_id));
+                let result =
+                    Compat::new(api_client.check_follow_status(&user_id, &channel_id)).await;
 
-            let _ = cx.update(|cx: &mut App| {
-                this.update(cx, |this: &mut SecousseApp, cx| {
-                    this.follow_in_flight = false;
-                    match result {
-                        Ok(is_following) => {
-                            this.is_following_current = Some(is_following);
+                let _ = cx.update(|cx: &mut App| {
+                    this.update(cx, |this: &mut SecousseApp, cx| {
+                        this.follow_in_flight = false;
+                        match result {
+                            Ok(is_following) => {
+                                this.is_following_current = Some(is_following);
+                            }
+                            Err(e) => {
+                                error!("Failed to check follow status: {}", e);
+                                this.is_following_current = None;
+                            }
                         }
-                        Err(e) => {
-                            error!("Failed to check follow status: {}", e);
-                            this.is_following_current = None;
-                        }
-                    }
-                    cx.notify();
-                })
-                .ok();
-            });
-        })
+                        cx.notify();
+                    })
+                    .ok();
+                });
+            },
+        )
         .detach();
     }
 
@@ -1356,30 +1390,32 @@ impl SecousseApp {
         let currently_following = self.is_following_current.unwrap_or(false);
         self.follow_in_flight = true;
 
-        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
-            let api_client = TwitchClient::new(Some(access_token), Some(device_id));
-            let result = if currently_following {
-                Compat::new(api_client.unfollow_user(&channel_id)).await
-            } else {
-                Compat::new(api_client.follow_user(&channel_id)).await
-            };
+        cx.spawn(
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                let api_client = TwitchClient::new(Some(access_token), Some(device_id));
+                let result = if currently_following {
+                    Compat::new(api_client.unfollow_user(&channel_id)).await
+                } else {
+                    Compat::new(api_client.follow_user(&channel_id)).await
+                };
 
-            let _ = cx.update(|cx: &mut App| {
-                this.update(cx, |this: &mut SecousseApp, cx| {
-                    this.follow_in_flight = false;
-                    match result {
-                        Ok(_) => {
-                            this.is_following_current = Some(!currently_following);
+                let _ = cx.update(|cx: &mut App| {
+                    this.update(cx, |this: &mut SecousseApp, cx| {
+                        this.follow_in_flight = false;
+                        match result {
+                            Ok(_) => {
+                                this.is_following_current = Some(!currently_following);
+                            }
+                            Err(e) => {
+                                error!("Failed to update follow status: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            error!("Failed to update follow status: {}", e);
-                        }
-                    }
-                    cx.notify();
-                })
-                .ok();
-            });
-        })
+                        cx.notify();
+                    })
+                    .ok();
+                });
+            },
+        )
         .detach();
     }
 
@@ -1404,7 +1440,12 @@ impl SecousseApp {
     }
 
     /// Render the channel view with video player and chat
-    fn render_channel_view(&self, channel: String, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_channel_view(
+        &self,
+        channel: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // Get video instance and stream error
         let video_instance = self.video.clone();
         let stream_error = self.stream_error.clone();
@@ -1448,9 +1489,7 @@ impl SecousseApp {
         } else {
             0.0
         };
-        let total_width = f32::from(window.bounds().size.width)
-            - f32::from(sidebar_width)
-            - chat_width;
+        let total_width = f32::from(window.bounds().size.width) - sidebar_width - chat_width;
         let follow_label_len = follow_label.chars().count() as f32;
         let follow_button_width = 72.0 + follow_label_len * 6.5;
         let left_padding = 32.0;
@@ -1509,51 +1548,42 @@ impl SecousseApp {
                             })
                             // Render video if available, otherwise show loading/error state
                             .when_some(video_instance.clone(), |this, vid| {
-                                this.child(
-                                    crate::video::video(vid)
-                                        .id("stream-video"),
-                                )
+                                this.child(crate::video::video(vid).id("stream-video"))
                             })
-                            .when(
-                                video_instance.is_none() && stream_error.is_some(),
-                                {
-                                    let err = stream_error.clone().unwrap_or_default();
-                                    move |this| {
-                                        this.flex_col().items_center().justify_center().child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .items_center()
-                                                .gap(px(8.0))
-                                                .child(
-                                                    div()
-                                                        .text_color(theme::TEXT_PRIMARY)
-                                                        .text_size(px(18.0))
-                                                        .child(err),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(theme::TEXT_SECONDARY)
-                                                        .text_size(px(14.0))
-                                                        .child(
-                                                            "The stream may be offline or unavailable.",
-                                                        ),
-                                                ),
-                                        )
-                                    }
-                                },
-                            )
-                            .when(
-                                video_instance.is_none() && stream_error.is_none(),
-                                |this| {
+                            .when(video_instance.is_none() && stream_error.is_some(), {
+                                let err = stream_error.clone().unwrap_or_default();
+                                move |this| {
                                     this.flex_col().items_center().justify_center().child(
                                         div()
-                                            .text_color(theme::TEXT_SECONDARY)
-                                            .text_size(px(16.0))
-                                            .child("Loading stream..."),
+                                            .flex()
+                                            .flex_col()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .child(
+                                                div()
+                                                    .text_color(theme::TEXT_PRIMARY)
+                                                    .text_size(px(18.0))
+                                                    .child(err),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme::TEXT_SECONDARY)
+                                                    .text_size(px(14.0))
+                                                    .child(
+                                                        "The stream may be offline or unavailable.",
+                                                    ),
+                                            ),
                                     )
-                                },
-                            )
+                                }
+                            })
+                            .when(video_instance.is_none() && stream_error.is_none(), |this| {
+                                this.flex_col().items_center().justify_center().child(
+                                    div()
+                                        .text_color(theme::TEXT_SECONDARY)
+                                        .text_size(px(16.0))
+                                        .child("Loading stream..."),
+                                )
+                            })
                             // Overlay controls at the bottom
                             .child(
                                 div()
@@ -1580,16 +1610,22 @@ impl SecousseApp {
                                                             .compact()
                                                             .rounded(px(2.0))
                                                             .icon(if is_playing {
-                                                                Icon::empty().path("icons/pause.svg").small()
+                                                                Icon::empty()
+                                                                    .path("icons/pause.svg")
+                                                                    .small()
                                                             } else {
-                                                                Icon::empty().path("icons/play.svg").small()
+                                                                Icon::empty()
+                                                                    .path("icons/play.svg")
+                                                                    .small()
                                                             })
-                                                            .on_click(move |_event, _window, _cx| {
-                                                                if let Some(video) = &video {
-                                                                    let paused = video.paused();
-                                                                    video.set_paused(!paused);
-                                                                }
-                                                            }),
+                                                            .on_click(
+                                                                move |_event, _window, _cx| {
+                                                                    if let Some(video) = &video {
+                                                                        let paused = video.paused();
+                                                                        video.set_paused(!paused);
+                                                                    }
+                                                                },
+                                                            ),
                                                     )
                                             })
                                             // Quality selector
@@ -1613,12 +1649,17 @@ impl SecousseApp {
                                                     } else {
                                                         IconName::Maximize
                                                     })
-                                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                                        this.app_state.update(cx, |state, cx| {
-                                                            state.toggle_fullscreen();
-                                                            cx.notify();
-                                                        });
-                                                    })),
+                                                    .on_click(cx.listener(
+                                                        |this, _event, _window, cx| {
+                                                            this.app_state.update(
+                                                                cx,
+                                                                |state, cx| {
+                                                                    state.toggle_fullscreen();
+                                                                    cx.notify();
+                                                                },
+                                                            );
+                                                        },
+                                                    )),
                                             ),
                                     ),
                             )
@@ -1659,7 +1700,9 @@ impl SecousseApp {
                                                 .rounded(px(2.0))
                                                 .text_color(theme::TEXT_PRIMARY)
                                                 .text_size(px(12.0))
-                                                .child(format_viewer_count(viewer_count.unwrap_or(0))),
+                                                .child(format_viewer_count(
+                                                    viewer_count.unwrap_or(0),
+                                                )),
                                         )
                                     }),
                             )
@@ -1679,12 +1722,14 @@ impl SecousseApp {
                                                 .compact()
                                                 .rounded(px(2.0))
                                                 .icon(IconName::PanelRight)
-                                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                                    this.app_state.update(cx, |state, cx| {
-                                                        state.toggle_chat();
-                                                        cx.notify();
-                                                    });
-                                                })),
+                                                .on_click(cx.listener(
+                                                    |this, _event, _window, cx| {
+                                                        this.app_state.update(cx, |state, cx| {
+                                                            state.toggle_chat();
+                                                            cx.notify();
+                                                        });
+                                                    },
+                                                )),
                                         ),
                                 )
                             }),
@@ -1706,112 +1751,110 @@ impl SecousseApp {
                                 .items_center()
                                 .justify_between()
                                 .gap(px(16.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(12.0))
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(if let Some(url) = avatar_url {
-                                        div()
-                                            .size(px(48.0))
-                                            .rounded_full()
-                                            .overflow_hidden()
-                                            .bg(theme::BG_TERTIARY)
-                                            .child(
-                                                img(url)
-                                                    .w_full()
-                                                    .h_full()
-                                                    .object_fit(ObjectFit::Cover)
-                                                    .rounded_full(),
-                                            )
-                                            .into_any_element()
-                                    } else {
-                                        div()
-                                            .size(px(48.0))
-                                            .rounded_full()
-                                            .bg(theme::TWITCH_PURPLE)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_color(theme::TEXT_PRIMARY)
-                                            .text_size(px(16.0))
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(
-                                                channel_for_back
-                                                    .chars()
-                                                    .next()
-                                                    .unwrap_or('?')
-                                                    .to_string(),
-                                            )
-                                            .into_any_element()
-                                    })
-                                    .child(
-                                        div()
-                                            .flex_col()
-                                            .gap(px(4.0))
-                                            .flex_1()
-                                            .min_w(px(0.0))
-                                            .child(
-                                                div()
-                                                    .text_color(theme::TEXT_PRIMARY)
-                                                    .text_size(px(16.0))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .child(channel_display),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(theme::TEXT_PRIMARY)
-                                                    .text_size(px(14.0))
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .child(stream_title),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                     .child(
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(12.0))
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(if let Some(url) = avatar_url {
+                                            div()
+                                                .size(px(48.0))
+                                                .rounded_full()
+                                                .overflow_hidden()
+                                                .bg(theme::BG_TERTIARY)
+                                                .child(
+                                                    img(url)
+                                                        .w_full()
+                                                        .h_full()
+                                                        .object_fit(ObjectFit::Cover)
+                                                        .rounded_full(),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .size(px(48.0))
+                                                .rounded_full()
+                                                .bg(theme::TWITCH_PURPLE)
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_color(theme::TEXT_PRIMARY)
+                                                .text_size(px(16.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .child(
+                                                    channel_for_back
+                                                        .chars()
+                                                        .next()
+                                                        .unwrap_or('?')
+                                                        .to_string(),
+                                                )
+                                                .into_any_element()
+                                        })
+                                        .child(
+                                            div()
+                                                .flex_col()
+                                                .gap(px(4.0))
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .child(
+                                                    div()
+                                                        .text_color(theme::TEXT_PRIMARY)
+                                                        .text_size(px(16.0))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .child(channel_display),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_color(theme::TEXT_PRIMARY)
+                                                        .text_size(px(14.0))
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .child(stream_title),
+                                                )
+                                                .child(
+                                                    div().flex().items_center().gap(px(8.0)).child(
                                                         div()
                                                             .text_color(theme::TEXT_SECONDARY)
                                                             .text_size(px(12.0))
-                                                        .child(game_name),
+                                                            .child(game_name),
                                                     ),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .flex_shrink_0()
-                                    // Follow button
-                                    .child(
-                                        {
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .flex_shrink_0()
+                                        // Follow button
+                                        .child({
                                             let mut button = Button::new("follow-btn")
                                                 .small()
                                                 .rounded(px(2.0))
                                                 .label(follow_label)
                                                 .icon(if self.is_following_current == Some(true) {
-                                                    Icon::new(IconName::Heart).text_color(theme::LIVE_RED)
+                                                    Icon::new(IconName::Heart)
+                                                        .text_color(theme::LIVE_RED)
                                                 } else {
                                                     Icon::new(IconName::Heart)
                                                 })
-                                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                                    if this.follow_in_flight
-                                                        || this.current_channel_id.is_none()
-                                                    {
-                                                        return;
-                                                    }
-                                                    if this.auth_state.read(cx).is_logged_in {
-                                                        this.toggle_follow(cx);
-                                                    }
-                                                }));
+                                                .on_click(cx.listener(
+                                                    |this, _event, _window, cx| {
+                                                        if this.follow_in_flight
+                                                            || this.current_channel_id.is_none()
+                                                        {
+                                                            return;
+                                                        }
+                                                        if this.auth_state.read(cx).is_logged_in {
+                                                            this.toggle_follow(cx);
+                                                        }
+                                                    },
+                                                ));
 
                                             if self.is_following_current == Some(true) {
                                                 button = button.selected(true);
@@ -1824,11 +1867,10 @@ impl SecousseApp {
                                             }
 
                                             button
-                                        },
-                                    ),
-                            ),
+                                        }),
+                                ),
                         )
-                    })
+                    }),
             )
             .when(is_chat_open && !is_fullscreen, |el| {
                 el.child(
@@ -1899,7 +1941,7 @@ impl SecousseApp {
                     } else {
                         rgba(0x000000b3)
                     })
-                        .into(),
+                    .into(),
                 )
                 .foreground(theme::TEXT_PRIMARY.into())
                 .border(theme::TRANSPARENT.into())
@@ -2044,11 +2086,14 @@ impl SecousseApp {
                                         })
                                         .child(quality_name.clone()),
                                 )
-                                .on_click(window.listener_for(&view, move |this, _event, _window, cx| {
-                                    this.switch_quality(i, cx);
-                                    this.quality_menu_open = false;
-                                    cx.notify();
-                                })),
+                                .on_click(window.listener_for(
+                                    &view,
+                                    move |this, _event, _window, cx| {
+                                        this.switch_quality(i, cx);
+                                        this.quality_menu_open = false;
+                                        cx.notify();
+                                    },
+                                )),
                         );
                     }
 
@@ -2064,7 +2109,9 @@ impl SecousseApp {
         }
 
         let lower_name = quality.name.to_lowercase();
-        if quality.resolution.is_none() && (lower_name.contains("source") || lower_name.contains("chunked")) {
+        if quality.resolution.is_none()
+            && (lower_name.contains("source") || lower_name.contains("chunked"))
+        {
             return "Source".to_string();
         }
 
@@ -2231,13 +2278,10 @@ impl SecousseApp {
                     .px(px(24.0))
                     .pb(px(24.0))
                     .child({
-                        let mut grid = div()
-                            .w_full()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(16.0));
+                        let mut grid = div().w_full().flex().flex_wrap().gap(px(16.0));
                         for channel in results.iter() {
-                            grid = grid.child(self.render_stream_card(channel, None, None, None, cx));
+                            grid =
+                                grid.child(self.render_stream_card(channel, None, None, None, cx));
                         }
                         grid
                     });
@@ -2246,7 +2290,11 @@ impl SecousseApp {
     }
 
     /// Render the Following tab
-    fn render_following_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_following_tab(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let is_logged_in = self.auth_state.read(cx).is_logged_in;
         let app = self.app_state.read(cx);
         let followed = app.followed_channels.clone();
@@ -2256,10 +2304,8 @@ impl SecousseApp {
         } else {
             theme::SIDEBAR_COLLAPSED_WIDTH
         };
-        let available_width = (f32::from(window.bounds().size.width)
-            - f32::from(sidebar_width)
-            - 48.0)
-            .max(0.0);
+        let available_width =
+            (f32::from(window.bounds().size.width) - sidebar_width - 48.0).max(0.0);
         let card_gap = 16.0;
         let min_card_width = 240.0;
         let info_height = 110.0;
@@ -2326,21 +2372,15 @@ impl SecousseApp {
                     .px(px(24.0))
                     .pb(px(24.0))
                     .child({
-                        let mut grid = div()
-                            .w_full()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(16.0));
+                        let mut grid = div().w_full().flex().flex_wrap().gap(px(16.0));
                         for channel in followed.iter().filter(|c| c.is_live) {
-                            grid = grid.child(
-                                self.render_stream_card(
-                                    channel,
-                                    Some(card_width),
-                                    Some(card_height),
-                                    Some(thumbnail_height),
-                                    cx,
-                                ),
-                            );
+                            grid = grid.child(self.render_stream_card(
+                                channel,
+                                Some(card_width),
+                                Some(card_height),
+                                Some(thumbnail_height),
+                                cx,
+                            ));
                         }
                         grid
                     });
@@ -2363,13 +2403,8 @@ impl SecousseApp {
             .as_ref()
             .map(|url| Self::format_thumbnail_url(url, 320, 180));
         let avatar_url = channel.profile_image_url.clone();
-        let stream_title = truncate_with_ellipsis(
-            &channel
-                .stream_title
-                .as_deref()
-                .unwrap_or("Live stream"),
-            50,
-        );
+        let stream_title =
+            truncate_with_ellipsis(channel.stream_title.as_deref().unwrap_or("Live stream"), 50);
 
         let mut card = div()
             .id(SharedString::from(format!("stream-card-{}", channel.login)))
@@ -2401,170 +2436,166 @@ impl SecousseApp {
             card = card.h(px(computed_thumbnail_height + 110.0));
         }
 
-        card
-            .child(
-                // Thumbnail
-                if let Some(url) = thumbnail_url {
-                    img(url)
-                        .w_full()
-                        .h(px(computed_thumbnail_height))
-                        .object_fit(ObjectFit::Cover)
-                        .with_loading(move || {
-                            div()
-                                .w_full()
-                                .h(px(computed_thumbnail_height))
-                                .bg(theme::VIDEO_BG)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_color(theme::TEXT_SECONDARY)
-                                        .text_size(px(12.0))
-                                        .child("Loading..."),
-                                )
-                                .into_any_element()
-                        })
-                        .with_fallback(move || {
-                            div()
-                                .w_full()
-                                .h(px(computed_thumbnail_height))
-                                .bg(theme::VIDEO_BG)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_color(theme::TEXT_SECONDARY)
-                                        .text_size(px(12.0))
-                                        .child(if is_live { "LIVE" } else { "OFFLINE" }),
-                                )
-                                .into_any_element()
-                        })
-                        .into_any_element()
-                } else {
+        card.child(
+            // Thumbnail
+            if let Some(url) = thumbnail_url {
+                img(url)
+                    .w_full()
+                    .h(px(computed_thumbnail_height))
+                    .object_fit(ObjectFit::Cover)
+                    .with_loading(move || {
+                        div()
+                            .w_full()
+                            .h(px(computed_thumbnail_height))
+                            .bg(theme::VIDEO_BG)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_color(theme::TEXT_SECONDARY)
+                                    .text_size(px(12.0))
+                                    .child("Loading..."),
+                            )
+                            .into_any_element()
+                    })
+                    .with_fallback(move || {
+                        div()
+                            .w_full()
+                            .h(px(computed_thumbnail_height))
+                            .bg(theme::VIDEO_BG)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_color(theme::TEXT_SECONDARY)
+                                    .text_size(px(12.0))
+                                    .child(if is_live { "LIVE" } else { "OFFLINE" }),
+                            )
+                            .into_any_element()
+                    })
+                    .into_any_element()
+            } else {
+                div()
+                    .w_full()
+                    .h(px(computed_thumbnail_height))
+                    .bg(theme::VIDEO_BG)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_color(theme::TEXT_SECONDARY)
+                            .text_size(px(12.0))
+                            .child(if is_live { "LIVE" } else { "OFFLINE" }),
+                    )
+                    .into_any_element()
+            },
+        )
+        .child(
+            // Stream info
+            div()
+                .p(px(12.0))
+                .h(px(110.0))
+                .flex()
+                .gap(px(10.0))
+                .child(
+                    // Avatar
+                    if let Some(url) = avatar_url {
+                        div()
+                            .size(px(40.0))
+                            .rounded_full()
+                            .overflow_hidden()
+                            .bg(theme::BG_TERTIARY)
+                            .flex_shrink_0()
+                            .child(
+                                img(url)
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(ObjectFit::Cover)
+                                    .rounded_full(),
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .size(px(40.0))
+                            .rounded_full()
+                            .bg(theme::TWITCH_PURPLE)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
+                            .text_color(theme::TEXT_PRIMARY)
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::BOLD)
+                            .child(
+                                channel
+                                    .display_name
+                                    .chars()
+                                    .next()
+                                    .unwrap_or('?')
+                                    .to_string(),
+                            )
+                            .into_any_element()
+                    },
+                )
+                .child(
                     div()
-                        .w_full()
-                        .h(px(computed_thumbnail_height))
-                        .bg(theme::VIDEO_BG)
-                        .flex()
-                        .items_center()
-                        .justify_center()
+                        .flex_1()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .text_color(theme::TEXT_PRIMARY)
+                                .text_size(px(14.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(truncate_with_ellipsis(&channel.display_name, 30)),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme::TEXT_PRIMARY)
+                                .text_size(px(13.0))
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(stream_title),
+                        )
                         .child(
                             div()
                                 .text_color(theme::TEXT_SECONDARY)
                                 .text_size(px(12.0))
-                                .child(if is_live { "LIVE" } else { "OFFLINE" }),
-                        )
-                        .into_any_element()
-                },
-            )
-            .child(
-                // Stream info
-                div()
-                    .p(px(12.0))
-                    .h(px(110.0))
-                    .flex()
-                    .gap(px(10.0))
-                    .child(
-                        // Avatar
-                        if let Some(url) = avatar_url {
-                            div()
-                                .size(px(40.0))
-                                .rounded_full()
                                 .overflow_hidden()
-                                .bg(theme::BG_TERTIARY)
-                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .child(truncate_with_ellipsis(
+                                    channel.game_name.as_deref().unwrap_or("Just Chatting"),
+                                    40,
+                                )),
+                        )
+                        .child(if is_live {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(div().size(px(8.0)).rounded_full().bg(theme::LIVE_RED))
                                 .child(
-                                    img(url)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(ObjectFit::Cover)
-                                        .rounded_full(),
+                                    div()
+                                        .text_color(theme::TEXT_SECONDARY)
+                                        .text_size(px(12.0))
+                                        .child(format_viewer_count(
+                                            channel.viewer_count.unwrap_or(0),
+                                        )),
                                 )
                                 .into_any_element()
                         } else {
                             div()
-                                .size(px(40.0))
-                                .rounded_full()
-                                .bg(theme::TWITCH_PURPLE)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .flex_shrink_0()
-                                .text_color(theme::TEXT_PRIMARY)
-                                .text_size(px(14.0))
-                                .font_weight(FontWeight::BOLD)
-                                .child(
-                                    channel
-                                        .display_name
-                                        .chars()
-                                        .next()
-                                        .unwrap_or('?')
-                                        .to_string(),
-                                )
+                                .text_color(theme::TEXT_SECONDARY)
+                                .text_size(px(12.0))
+                                .child("Offline")
                                 .into_any_element()
-                        },
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .text_size(px(14.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .child(truncate_with_ellipsis(&channel.display_name, 30)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .text_size(px(13.0))
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .child(stream_title),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::TEXT_SECONDARY)
-                                    .text_size(px(12.0))
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .child(truncate_with_ellipsis(
-                                        &channel
-                                            .game_name
-                                            .as_deref()
-                                            .unwrap_or("Just Chatting"),
-                                        40,
-                                    )),
-                            )
-                            .child(if is_live {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .child(div().size(px(8.0)).rounded_full().bg(theme::LIVE_RED))
-                                    .child(
-                                        div()
-                                            .text_color(theme::TEXT_SECONDARY)
-                                            .text_size(px(12.0))
-                                            .child(format_viewer_count(
-                                                channel.viewer_count.unwrap_or(0),
-                                            )),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div()
-                                    .text_color(theme::TEXT_SECONDARY)
-                                    .text_size(px(12.0))
-                                    .child("Offline")
-                                    .into_any_element()
-                            }),
-                    ),
-            )
+                        }),
+                ),
+        )
     }
 
     /// Format a Twitch thumbnail URL to a specific size
@@ -2586,10 +2617,8 @@ impl SecousseApp {
         } else {
             theme::SIDEBAR_COLLAPSED_WIDTH
         };
-        let available_width = (f32::from(window.bounds().size.width)
-            - f32::from(sidebar_width)
-            - 48.0)
-            .max(0.0);
+        let available_width =
+            (f32::from(window.bounds().size.width) - sidebar_width - 48.0).max(0.0);
         let card_gap = 16.0;
         let min_card_width = 240.0;
         let info_height = 110.0;
@@ -2602,7 +2631,7 @@ impl SecousseApp {
             .max(min_card_width);
         let thumbnail_height = (card_width * 9.0 / 16.0).round();
         let card_height = thumbnail_height + info_height;
-        let rows = (top_streams.len() + columns - 1) / columns;
+        let rows = top_streams.len().div_ceil(columns);
 
         div()
             .id("browse-tab")
@@ -2675,15 +2704,13 @@ impl SecousseApp {
                                     .gap(px(card_gap))
                                     .pb(px(row_gap));
                                 for stream in streams.iter().take(end).skip(start) {
-                                    row = row.child(
-                                        view.render_stream_card(
-                                            stream,
-                                            Some(card_width),
-                                            Some(card_height),
-                                            Some(thumbnail_height),
-                                            cx,
-                                        ),
-                                    );
+                                    row = row.child(view.render_stream_card(
+                                        stream,
+                                        Some(card_width),
+                                        Some(card_height),
+                                        Some(thumbnail_height),
+                                        cx,
+                                    ));
                                 }
                                 row
                             })
@@ -2717,21 +2744,25 @@ impl Render for SecousseApp {
             .bg(theme::BG_PRIMARY)
             .text_color(theme::TEXT_PRIMARY)
             .track_focus(&self.root_focus)
-            .on_action(cx.listener(|this, _action: &actions::ToggleFullscreen, _window, cx| {
-                this.app_state.update(cx, |state, cx| {
-                    state.toggle_fullscreen();
-                    cx.notify();
-                });
-            }))
-            .on_action(cx.listener(|this, _action: &actions::ExitFullscreen, _window, cx| {
-                let is_fullscreen = this.app_state.read(cx).is_fullscreen;
-                if is_fullscreen {
+            .on_action(
+                cx.listener(|this, _action: &actions::ToggleFullscreen, _window, cx| {
                     this.app_state.update(cx, |state, cx| {
                         state.toggle_fullscreen();
                         cx.notify();
                     });
-                }
-            }))
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _action: &actions::ExitFullscreen, _window, cx| {
+                    let is_fullscreen = this.app_state.read(cx).is_fullscreen;
+                    if is_fullscreen {
+                        this.app_state.update(cx, |state, cx| {
+                            state.toggle_fullscreen();
+                            cx.notify();
+                        });
+                    }
+                }),
+            )
             // Navbar (hidden in fullscreen)
             .when(!is_fullscreen, |el| {
                 el.child(

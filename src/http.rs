@@ -85,9 +85,7 @@ impl HttpClient for ReqwestClient {
         let request = request.body(match body.0 {
             Inner::Empty => reqwest::Body::default(),
             Inner::Bytes(cursor) => cursor.into_inner().into(),
-            Inner::AsyncReader(stream) => {
-                reqwest::Body::wrap_stream(StreamReader::new(stream))
-            }
+            Inner::AsyncReader(stream) => reqwest::Body::wrap_stream(StreamReader::new(stream)),
         });
 
         let handle = self.handle.clone();
@@ -185,8 +183,7 @@ fn poll_read_buf(
 
     let dst = buf.chunk_mut();
     // Safety: chunk_mut returns uninitialized memory, we zero it for AsyncRead
-    let dst_slice =
-        unsafe { &mut *(dst as *mut _ as *mut [u8]) };
+    let dst_slice = unsafe { &mut *(dst as *mut _ as *mut [u8]) };
 
     let io_pin = unsafe { Pin::new_unchecked(&mut *io) };
     match futures::AsyncRead::poll_read(io_pin, cx, dst_slice) {

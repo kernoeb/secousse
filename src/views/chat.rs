@@ -69,8 +69,10 @@ impl ChatView {
         let chat_input = cx.new(|cx| InputState::new(window, cx));
 
         // Subscribe to input events for sending messages
-        cx.subscribe_in(&chat_input, window, |this, state, event: &InputEvent, window, cx| {
-            match event {
+        cx.subscribe_in(
+            &chat_input,
+            window,
+            |this, state, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { .. } => {
                     let text = state.read(cx).value().to_string();
                     if !text.is_empty() {
@@ -81,8 +83,8 @@ impl ChatView {
                     }
                 }
                 InputEvent::Change | InputEvent::Focus | InputEvent::Blur => {}
-            }
-        })
+            },
+        )
         .detach();
 
         // Bottom-aligned list: new items appear at the bottom, viewport stays pinned.
@@ -122,41 +124,43 @@ impl ChatView {
 
         // Fetch third-party emotes (7TV, BTTV, FFZ) in the background
         if let Some(ch_id) = channel_id {
-            cx.spawn(async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {
-                info!("[ChatView] Fetching emotes for channel {}", ch_id);
+            cx.spawn(
+                async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {
+                    info!("[ChatView] Fetching emotes for channel {}", ch_id);
 
-                // Fetch global + channel emotes concurrently
-                let (global, channel_emotes) = Compat::new(async {
-                    tokio::join!(
-                        emotes::fetch_global_emotes(),
-                        emotes::fetch_channel_emotes(&ch_id)
-                    )
-                })
-                .await;
+                    // Fetch global + channel emotes concurrently
+                    let (global, channel_emotes) = Compat::new(async {
+                        tokio::join!(
+                            emotes::fetch_global_emotes(),
+                            emotes::fetch_channel_emotes(&ch_id)
+                        )
+                    })
+                    .await;
 
-                let total = global.len() + channel_emotes.len();
-                info!(
-                    "[ChatView] Loaded {} emotes ({} global, {} channel)",
-                    total,
-                    global.len(),
-                    channel_emotes.len()
-                );
+                    let total = global.len() + channel_emotes.len();
+                    info!(
+                        "[ChatView] Loaded {} emotes ({} global, {} channel)",
+                        total,
+                        global.len(),
+                        channel_emotes.len()
+                    );
 
-                // Insert into the shared map
-                {
-                    let mut map = third_party_emotes.lock().unwrap();
-                    for emote in global.into_iter().chain(channel_emotes) {
-                        map.insert(emote.name, emote.url);
+                    // Insert into the shared map
+                    {
+                        let mut map = third_party_emotes.lock().unwrap();
+                        for emote in global.into_iter().chain(channel_emotes) {
+                            map.insert(emote.name, emote.url);
+                        }
                     }
-                }
 
-                // Notify to re-render messages with emotes
-                let _ = cx.update(|cx: &mut App| {
-                    let _ = this.update(cx, |_view: &mut ChatView, cx| {
-                        cx.notify();
+                    // Notify to re-render messages with emotes
+                    let _ = cx.update(|cx: &mut App| {
+                        let _ = this.update(cx, |_view: &mut ChatView, cx| {
+                            cx.notify();
+                        });
                     });
-                });
-            })
+                },
+            )
             .detach();
         }
 
@@ -175,114 +179,116 @@ impl ChatView {
 
         info!("[ChatView] Connecting to #{}", channel);
 
-        cx.spawn(async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {
-            // Reconnect loop - will keep trying to connect
-            loop {
-                // Connect using tokio runtime via Compat wrapper
-                let channel_for_connect = channel.clone();
-                let access_token_clone = access_token.clone();
-                let username_clone = username.clone();
-                let connection_result = Compat::new(crate::api::chat::connect_chat(
-                    channel_for_connect,
-                    access_token_clone,
-                    username_clone,
-                ))
-                .await;
+        cx.spawn(
+            async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {
+                // Reconnect loop - will keep trying to connect
+                loop {
+                    // Connect using tokio runtime via Compat wrapper
+                    let channel_for_connect = channel.clone();
+                    let access_token_clone = access_token.clone();
+                    let username_clone = username.clone();
+                    let connection_result = Compat::new(crate::api::chat::connect_chat(
+                        channel_for_connect,
+                        access_token_clone,
+                        username_clone,
+                    ))
+                    .await;
 
-                match connection_result {
-                    Ok(connection) => {
-                        info!("[ChatView] Connected to #{}", channel);
+                    match connection_result {
+                        Ok(connection) => {
+                            info!("[ChatView] Connected to #{}", channel);
 
-                        // Store sender for sending messages
-                        let sender = connection.sender.clone();
-                        let _ = cx.update(|cx: &mut App| {
-                            let _ = this.update(cx, |view: &mut ChatView, cx| {
-                                view.sender = Some(sender);
-                                view.is_connected = true;
-                                cx.emit(ChatViewEvent::ConnectionStatusChanged);
-                                cx.notify();
+                            // Store sender for sending messages
+                            let sender = connection.sender.clone();
+                            let _ = cx.update(|cx: &mut App| {
+                                let _ = this.update(cx, |view: &mut ChatView, cx| {
+                                    view.sender = Some(sender);
+                                    view.is_connected = true;
+                                    cx.emit(ChatViewEvent::ConnectionStatusChanged);
+                                    cx.notify();
+                                });
                             });
-                        });
 
-                        // Process incoming messages - async_channel works with smol directly
-                        let channel_for_loop = channel.clone();
-                        while let Ok(event) = connection.receiver.recv().await {
-                            match event {
-                                ChatEvent::Message(msg) => {
-                                    let mut msgs = messages.lock().unwrap();
-                                    msgs.push_back(msg);
-                                    while msgs.len() > MAX_MESSAGES {
-                                        msgs.pop_front();
+                            // Process incoming messages - async_channel works with smol directly
+                            let channel_for_loop = channel.clone();
+                            while let Ok(event) = connection.receiver.recv().await {
+                                match event {
+                                    ChatEvent::Message(msg) => {
+                                        let mut msgs = messages.lock().unwrap();
+                                        msgs.push_back(msg);
+                                        while msgs.len() > MAX_MESSAGES {
+                                            msgs.pop_front();
+                                        }
+                                        drop(msgs);
+
+                                        let _ = cx.update(|cx: &mut App| {
+                                            let _ = this.update(cx, |_view: &mut ChatView, cx| {
+                                                cx.notify();
+                                            });
+                                        });
                                     }
-                                    drop(msgs);
-
-                                    let _ = cx.update(|cx: &mut App| {
-                                        let _ = this.update(cx, |_view: &mut ChatView, cx| {
-                                            cx.notify();
+                                    ChatEvent::Notice(notice) => {
+                                        info!("[ChatView] Notice: {}", notice);
+                                    }
+                                    ChatEvent::Connected => {
+                                        info!("[ChatView] Connection confirmed");
+                                    }
+                                    ChatEvent::Disconnected(reason) => {
+                                        info!("[ChatView] Disconnected: {}", reason);
+                                        let _ = cx.update(|cx: &mut App| {
+                                            let _ = this.update(cx, |view: &mut ChatView, cx| {
+                                                view.is_connected = false;
+                                                view.sender = None;
+                                                cx.emit(ChatViewEvent::ConnectionStatusChanged);
+                                                cx.notify();
+                                            });
                                         });
-                                    });
-                                }
-                                ChatEvent::Notice(notice) => {
-                                    info!("[ChatView] Notice: {}", notice);
-                                }
-                                ChatEvent::Connected => {
-                                    info!("[ChatView] Connection confirmed");
-                                }
-                                ChatEvent::Disconnected(reason) => {
-                                    info!("[ChatView] Disconnected: {}", reason);
-                                    let _ = cx.update(|cx: &mut App| {
-                                        let _ = this.update(cx, |view: &mut ChatView, cx| {
-                                            view.is_connected = false;
-                                            view.sender = None;
-                                            cx.emit(ChatViewEvent::ConnectionStatusChanged);
-                                            cx.notify();
-                                        });
-                                    });
-                                    break;
+                                        break;
+                                    }
                                 }
                             }
+                            info!("[ChatView] Message loop ended for #{}", channel_for_loop);
                         }
-                        info!("[ChatView] Message loop ended for #{}", channel_for_loop);
-                    }
-                    Err(e) => {
-                        error!("[ChatView] Failed to connect: {}", e);
-                        let _ = cx.update(|cx: &mut App| {
-                            let _ = this.update(cx, |view: &mut ChatView, cx| {
-                                view.is_connected = false;
-                                cx.notify();
+                        Err(e) => {
+                            error!("[ChatView] Failed to connect: {}", e);
+                            let _ = cx.update(|cx: &mut App| {
+                                let _ = this.update(cx, |view: &mut ChatView, cx| {
+                                    view.is_connected = false;
+                                    cx.notify();
+                                });
                             });
-                        });
+                        }
                     }
-                }
 
-                // Wait before attempting to reconnect
-                info!(
-                    "[ChatView] Will attempt to reconnect to #{} in 5 seconds...",
-                    channel
-                );
-                smol::Timer::after(std::time::Duration::from_secs(5)).await;
+                    // Wait before attempting to reconnect
+                    info!(
+                        "[ChatView] Will attempt to reconnect to #{} in 5 seconds...",
+                        channel
+                    );
+                    smol::Timer::after(std::time::Duration::from_secs(5)).await;
 
-                // Check if we should still reconnect (view might be dropped)
-                let should_reconnect = cx
-                    .update(|cx: &mut App| {
-                        this.update(cx, |view: &mut ChatView, _cx| {
-                            // Only reconnect if we're still tracking this channel
-                            !view.channel.is_empty()
+                    // Check if we should still reconnect (view might be dropped)
+                    let should_reconnect = cx
+                        .update(|cx: &mut App| {
+                            this.update(cx, |view: &mut ChatView, _cx| {
+                                // Only reconnect if we're still tracking this channel
+                                !view.channel.is_empty()
+                            })
+                            .ok()
+                            .unwrap_or(false)
                         })
                         .ok()
-                        .unwrap_or(false)
-                    })
-                    .ok()
-                    .unwrap_or(false);
+                        .unwrap_or(false);
 
-                if !should_reconnect {
-                    info!("[ChatView] Stopping reconnect loop for #{}", channel);
-                    break;
+                    if !should_reconnect {
+                        info!("[ChatView] Stopping reconnect loop for #{}", channel);
+                        break;
+                    }
+
+                    info!("[ChatView] Attempting to reconnect to #{}...", channel);
                 }
-
-                info!("[ChatView] Attempting to reconnect to #{}...", channel);
-            }
-        })
+            },
+        )
         .detach();
     }
 
@@ -292,10 +298,7 @@ impl ChatView {
             return;
         }
 
-        let user = self
-            .username
-            .clone()
-            .unwrap_or_else(|| "You".to_string());
+        let user = self.username.clone().unwrap_or_else(|| "You".to_string());
         let id = format!(
             "local-{}",
             std::time::SystemTime::now()
@@ -328,11 +331,13 @@ impl ChatView {
             let sender = sender.clone();
 
             // async_channel works with smol directly, no Compat needed
-            cx.spawn(async move |_this: gpui::WeakEntity<ChatView>, _cx: &mut gpui::AsyncApp| {
-                if let Err(e) = sender.send(text).await {
-                    error!("[ChatView] Failed to send message: {}", e);
-                }
-            })
+            cx.spawn(
+                async move |_this: gpui::WeakEntity<ChatView>, _cx: &mut gpui::AsyncApp| {
+                    if let Err(e) = sender.send(text).await {
+                        error!("[ChatView] Failed to send message: {}", e);
+                    }
+                },
+            )
             .detach();
 
             cx.notify();
@@ -404,25 +409,23 @@ impl Render for ChatView {
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(
-                                {
-                                    let close_variant = ButtonCustomVariant::new(cx)
-                                        .color(theme::TRANSPARENT.into())
-                                        .foreground(theme::TEXT_SECONDARY.into())
-                                        .border(theme::TRANSPARENT.into())
-                                        .hover(theme::BG_ELEVATED.into())
-                                        .active(theme::BG_ELEVATED.into());
+                            .child({
+                                let close_variant = ButtonCustomVariant::new(cx)
+                                    .color(theme::TRANSPARENT.into())
+                                    .foreground(theme::TEXT_SECONDARY.into())
+                                    .border(theme::TRANSPARENT.into())
+                                    .hover(theme::BG_ELEVATED.into())
+                                    .active(theme::BG_ELEVATED.into());
 
-                                    Button::new("chat-close-btn")
-                                        .custom(close_variant)
-                                        .xsmall()
-                                        .rounded(px(2.0))
-                                        .icon(IconName::PanelRight)
-                                        .on_click(cx.listener(|_this, _event, _window, cx| {
-                                            cx.emit(ChatViewEvent::CloseRequested);
-                                        }))
-                                },
-                            )
+                                Button::new("chat-close-btn")
+                                    .custom(close_variant)
+                                    .xsmall()
+                                    .rounded(px(2.0))
+                                    .icon(IconName::PanelRight)
+                                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                                        cx.emit(ChatViewEvent::CloseRequested);
+                                    }))
+                            })
                             .child(
                                 div()
                                     .text_color(theme::TEXT_PRIMARY)
@@ -539,7 +542,10 @@ enum MessageFragment {
 /// 2. Walk through the message: for each word that isn't a native emote, check the
 ///    third-party emote map (7TV/BTTV/FFZ).
 /// 3. Produce a flex-wrap div with text spans and `img()` elements.
-fn render_message(msg: &ChatMessage, third_party_emotes: &HashMap<String, String>) -> impl IntoElement {
+fn render_message(
+    msg: &ChatMessage,
+    third_party_emotes: &HashMap<String, String>,
+) -> impl IntoElement {
     let color = msg
         .color
         .as_deref()
@@ -567,16 +573,14 @@ fn render_message(msg: &ChatMessage, third_party_emotes: &HashMap<String, String
             .px(px(16.0))
             .text_size(px(13.0))
             .text_color(theme::TEXT_PRIMARY)
-            .child(
-                StyledText::new(full_text).with_highlights(vec![(
-                    0..username_len,
-                    HighlightStyle {
-                        color: Some(color.into()),
-                        font_weight: Some(FontWeight::SEMIBOLD),
-                        ..Default::default()
-                    },
-                )]),
-            )
+            .child(StyledText::new(full_text).with_highlights(vec![(
+                0..username_len,
+                HighlightStyle {
+                    color: Some(color.into()),
+                    font_weight: Some(FontWeight::SEMIBOLD),
+                    ..Default::default()
+                },
+            )]))
             .into_any_element();
     }
 
@@ -682,12 +686,10 @@ fn char_index_to_byte_index(text: &str, char_index: usize) -> usize {
         return 0;
     }
 
-    let mut count = 0usize;
-    for (byte_index, _) in text.char_indices() {
+    for (count, (byte_index, _)) in text.char_indices().enumerate() {
         if count == char_index {
             return byte_index;
         }
-        count += 1;
     }
 
     text.len()
@@ -718,9 +720,7 @@ fn build_fragments_word_match(
                 fragments.push(MessageFragment::Text(pending_text.clone()));
                 pending_text.clear();
             }
-            fragments.push(MessageFragment::Emote {
-                url: url.clone(),
-            });
+            fragments.push(MessageFragment::Emote { url: url.clone() });
             // Preserve trailing space after emote
             if word.ends_with(' ') {
                 pending_text.push(' ');

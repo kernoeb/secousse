@@ -1,7 +1,6 @@
 //! Twitch IRC Chat WebSocket client
 //!
 //! Handles real-time chat communication via Twitch's IRC WebSocket.
-#![allow(clippy::collapsible_if)]
 
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
@@ -279,12 +278,11 @@ fn parse_emotes_tag(tags: &str) -> Vec<(String, usize, usize)> {
         let emote_id = parts[0];
         for range in parts[1].split(',') {
             let positions: Vec<&str> = range.split('-').collect();
-            if positions.len() == 2 {
-                if let (Ok(start), Ok(end)) =
+            if positions.len() == 2
+                && let (Ok(start), Ok(end)) =
                     (positions[0].parse::<usize>(), positions[1].parse::<usize>())
-                {
-                    result.push((emote_id.to_string(), start, end));
-                }
+            {
+                result.push((emote_id.to_string(), start, end));
             }
         }
     }

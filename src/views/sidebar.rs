@@ -2,12 +2,12 @@
 //!
 //! Contains the followed channels list and collapse toggle.
 
+use crate::state::{AppState, FollowedChannel};
+use crate::theme;
 use gpui::prelude::{FluentBuilder, StyledImage};
 use gpui::*;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::{IconName, Sizable};
-use crate::state::{AppState, FollowedChannel};
-use crate::theme;
 
 /// Events emitted by the sidebar
 #[derive(Clone, Debug)]

@@ -1,14 +1,12 @@
-#![allow(dead_code)]
-
 use crate::video::gst_video::Video;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 use core_video::pixel_buffer::{
+    CVPixelBuffer, CVPixelBufferLockBaseAddress, CVPixelBufferUnlockBaseAddress,
     kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
-    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVPixelBuffer, CVPixelBufferLockBaseAddress,
-    CVPixelBufferUnlockBaseAddress,
+    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
 };
 use gpui::{
     Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Window,
@@ -53,42 +51,6 @@ impl VideoElement {
 
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.element_id = Some(id.into());
-        self
-    }
-
-    pub fn size(mut self, width: gpui::Pixels, height: gpui::Pixels) -> Self {
-        self.display_width = Some(width);
-        self.display_height = Some(height);
-        self.fill_container = false;
-        self
-    }
-
-    /// Set only width; height is inferred via aspect ratio.
-    pub fn width(mut self, width: gpui::Pixels) -> Self {
-        self.display_width = Some(width);
-        self.display_height = None;
-        self.fill_container = false;
-        self
-    }
-
-    /// Set only height; width is inferred via aspect ratio.
-    pub fn height(mut self, height: gpui::Pixels) -> Self {
-        self.display_height = Some(height);
-        self.display_width = None;
-        self.fill_container = false;
-        self
-    }
-
-    /// Make the element fill its container (default behavior).
-    pub fn flex(mut self) -> Self {
-        self.fill_container = true;
-        self
-    }
-
-    /// Configure how many frames to buffer inside the underlying `Video`.
-    /// 0 disables buffering and behaves like immediate rendering.
-    pub fn buffer_capacity(self, capacity: usize) -> Self {
-        self.video.set_frame_buffer_capacity(capacity);
         self
     }
 
@@ -166,8 +128,8 @@ impl VideoElement {
                 let strides = vinfo.stride();
                 if strides.len() > 1 && vinfo.width() > 0 && vinfo.height() > 0 {
                     (
-                        vinfo.width() as u32,
-                        vinfo.height() as u32,
+                        vinfo.width(),
+                        vinfo.height(),
                         strides[0] as u32,
                         strides[1] as u32,
                     )

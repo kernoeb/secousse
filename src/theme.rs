@@ -1,7 +1,6 @@
 //! Twitch-themed color palette and styling constants for Secousse
 //!
 //! These colors are based on Twitch's dark mode design system.
-#![allow(dead_code)]
 
 use gpui::Rgba;
 
@@ -41,9 +40,6 @@ pub const BG_TERTIARY: Rgba = rgb(0x1f1f23);
 /// Menus, dropdowns, modals
 pub const BG_ELEVATED: Rgba = rgb(0x26262c);
 
-/// Input fields, search boxes
-pub const BG_INPUT: Rgba = rgb(0x3f3f46);
-
 // ============================================================================
 // Text Colors
 // ============================================================================
@@ -57,21 +53,12 @@ pub const TEXT_SECONDARY: Rgba = rgb(0xadadb8);
 /// Disabled/placeholder text
 pub const TEXT_DISABLED: Rgba = rgb(0x71717a);
 
-/// Links and interactive text
-pub const TEXT_LINK: Rgba = rgb(0xbf94ff);
-
 // ============================================================================
 // Brand Colors
 // ============================================================================
 
 /// Twitch Purple - primary brand color
 pub const TWITCH_PURPLE: Rgba = rgb(0x9146ff);
-
-/// Twitch Purple hover state
-pub const TWITCH_PURPLE_HOVER: Rgba = rgb(0x772ce8);
-
-/// Twitch Purple active/pressed state
-pub const TWITCH_PURPLE_ACTIVE: Rgba = rgb(0x5c16c5);
 
 // ============================================================================
 // Status Colors
@@ -83,24 +70,8 @@ pub const LIVE_RED: Rgba = rgb(0xeb0400);
 /// Success/online green
 pub const SUCCESS_GREEN: Rgba = rgb(0x00c853);
 
-/// Warning yellow
-pub const WARNING_YELLOW: Rgba = rgb(0xffca28);
-
-/// Error red
-pub const ERROR_RED: Rgba = rgb(0xff4444);
-
 /// Offline/away gray
 pub const OFFLINE_GRAY: Rgba = rgb(0x6b6b6b);
-
-// ============================================================================
-// Border Colors
-// ============================================================================
-
-/// Default border color
-pub const BORDER_DEFAULT: Rgba = rgb(0x3f3f46);
-
-/// Focus border (purple accent)
-pub const BORDER_FOCUS: Rgba = rgb(0x9146ff);
 
 /// Subtle border for cards
 pub const BORDER_SUBTLE: Rgba = rgb(0x27272a);
@@ -111,9 +82,6 @@ pub const BORDER_SUBTLE: Rgba = rgb(0x27272a);
 
 /// Video player background (pure black)
 pub const VIDEO_BG: Rgba = rgb(0x000000);
-
-/// Chat message hover background
-pub const CHAT_HOVER: Rgba = rgba(0xffffff, 0.05);
 
 /// Selected/active item background
 pub const SELECTED_BG: Rgba = rgba(0x9146ff, 0.2);
@@ -146,43 +114,3 @@ pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 50.0;
 
 /// Chat panel default width
 pub const CHAT_WIDTH: f32 = 340.0;
-
-/// Standard border radius
-pub const BORDER_RADIUS: f32 = 4.0;
-
-/// Rounded border radius (buttons, badges)
-pub const BORDER_RADIUS_ROUNDED: f32 = 8.0;
-
-/// Full rounded (pills, avatars)
-pub const BORDER_RADIUS_FULL: f32 = 9999.0;
-
-// ============================================================================
-// Spacing Constants (based on 4px grid)
-// ============================================================================
-
-pub const SPACING_1: f32 = 4.0;
-pub const SPACING_2: f32 = 8.0;
-pub const SPACING_3: f32 = 12.0;
-pub const SPACING_4: f32 = 16.0;
-pub const SPACING_5: f32 = 20.0;
-pub const SPACING_6: f32 = 24.0;
-pub const SPACING_8: f32 = 32.0;
-
-// ============================================================================
-// Font Sizes
-// ============================================================================
-
-pub const FONT_SIZE_XS: f32 = 11.0;
-pub const FONT_SIZE_SM: f32 = 13.0;
-pub const FONT_SIZE_BASE: f32 = 14.0;
-pub const FONT_SIZE_LG: f32 = 16.0;
-pub const FONT_SIZE_XL: f32 = 18.0;
-pub const FONT_SIZE_2XL: f32 = 24.0;
-
-// ============================================================================
-// Animation Durations (in seconds)
-// ============================================================================
-
-pub const TRANSITION_FAST: f32 = 0.1;
-pub const TRANSITION_NORMAL: f32 = 0.2;
-pub const TRANSITION_SLOW: f32 = 0.3;
