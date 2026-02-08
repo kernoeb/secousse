@@ -4,12 +4,79 @@
 #![allow(dead_code, clippy::collapsible_if)]
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::state::Settings;
 
 /// Represents an emote with its name and URL
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Emote {
     pub name: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EmoteCache {
+    fetched_at: u64,
+    emotes: Vec<Emote>,
+}
+
+const GLOBAL_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+const CHANNEL_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
+
+fn cache_dir() -> PathBuf {
+    Settings::data_dir().join("emotes")
+}
+
+fn cache_path(key: &str) -> PathBuf {
+    cache_dir().join(format!("{}.json", key))
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn load_cache(path: &PathBuf, ttl_secs: u64) -> Option<Vec<Emote>> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let cache: EmoteCache = serde_json::from_str(&contents).ok()?;
+    let age = now_unix_secs().saturating_sub(cache.fetched_at);
+    if age <= ttl_secs {
+        Some(cache.emotes)
+    } else {
+        None
+    }
+}
+
+fn save_cache(path: &PathBuf, emotes: &[Emote]) {
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+
+    let cache = EmoteCache {
+        fetched_at: now_unix_secs(),
+        emotes: emotes.to_vec(),
+    };
+
+    if let Ok(json) = serde_json::to_string(&cache) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+pub fn load_cached_global_emotes() -> Vec<Emote> {
+    let path = cache_path("global");
+    load_cache(&path, GLOBAL_CACHE_TTL_SECS).unwrap_or_default()
+}
+
+pub fn load_cached_channel_emotes(channel_id: &str) -> Vec<Emote> {
+    let key = format!("channel_{}", channel_id);
+    let path = cache_path(&key);
+    load_cache(&path, CHANNEL_CACHE_TTL_SECS).unwrap_or_default()
 }
 
 /// Fetch all channel emotes from all providers
@@ -24,6 +91,9 @@ pub async fn fetch_channel_emotes(channel_id: &str) -> Vec<Emote> {
     emotes.extend(stv);
     emotes.extend(bttv);
     emotes.extend(ffz);
+    let key = format!("channel_{}", channel_id);
+    let path = cache_path(&key);
+    save_cache(&path, &emotes);
     emotes
 }
 
@@ -35,6 +105,8 @@ pub async fn fetch_global_emotes() -> Vec<Emote> {
     let mut emotes = Vec::with_capacity(stv_emotes.len() + bttv_emotes.len());
     emotes.extend(stv_emotes);
     emotes.extend(bttv_emotes);
+    let path = cache_path("global");
+    save_cache(&path, &emotes);
     emotes
 }
 

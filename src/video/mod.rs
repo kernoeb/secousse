@@ -7,4 +7,4 @@ mod error;
 mod gst_video;
 
 pub use element::video;
-pub use gst_video::{Video, VideoOptions};
+pub use gst_video::{warmup_gstreamer, Video, VideoOptions};

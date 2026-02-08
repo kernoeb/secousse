@@ -10,6 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Position in the media.
@@ -64,6 +65,26 @@ pub struct VideoOptions {
     pub looping: Option<bool>,
     /// Optional initial playback speed. Defaults to 1.0.
     pub speed: Option<f64>,
+}
+
+pub fn warmup_gstreamer() {
+    static WARMED: OnceLock<()> = OnceLock::new();
+    if WARMED.set(()).is_err() {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        if gst::init().is_err() {
+            return;
+        }
+
+        if let Ok(pipeline) = gst::parse::launch("fakesrc num-buffers=1 ! fakesink") {
+            if let Ok(pipeline) = pipeline.downcast::<gst::Pipeline>() {
+                let _ = pipeline.set_state(gst::State::Playing);
+                let _ = pipeline.set_state(gst::State::Null);
+            }
+        }
+    });
 }
 
 impl Default for VideoOptions {
@@ -321,48 +342,55 @@ impl Video {
         log::info!("[Video] Setting pipeline to Playing state...");
         cleanup!(pipeline.set_state(gst::State::Playing))?;
 
-        // Wait a brief moment for the pipeline to start playing
-        log::info!("[Video] Waiting 100ms for pipeline to start...");
-        let _ = pipeline.state(gst::ClockTime::from_mseconds(100));
-        log::info!("[Video] Waiting up to 5s for pipeline state...");
-        let state_result = pipeline.state(gst::ClockTime::from_seconds(5));
+        // Avoid long blocking waits here; the worker will start pulling frames as they arrive.
+        log::info!("[Video] Checking pipeline state (non-blocking)...");
+        let state_result = pipeline.state(gst::ClockTime::from_mseconds(200));
         log::info!("[Video] Pipeline state result: {:?}", state_result);
         cleanup!(state_result.0)?;
 
         log::info!("[Video] Getting caps from pad...");
-        let caps = cleanup!(pad.current_caps().ok_or(Error::Caps))?;
-        log::info!("[Video] Got caps: {:?}", caps);
-        let s = cleanup!(caps.structure(0).ok_or(Error::Caps))?;
-        let width = cleanup!(s.get::<i32>("width").map_err(|_| Error::Caps))?;
-        let height = cleanup!(s.get::<i32>("height").map_err(|_| Error::Caps))?;
-        let framerate = cleanup!(s.get::<gst::Fraction>("framerate").map_err(|_| Error::Caps))?;
-        let mut framerate = framerate.numer() as f64 / framerate.denom() as f64;
+        let caps = pad.current_caps();
 
-        // Obtain video info from caps for NV12 format (to get stride info)
-        let vinfo = cleanup!(gst_video::VideoInfo::from_caps(&caps).map_err(|_| Error::Caps))?;
-        let y_stride = vinfo.stride()[0]; // Y plane stride
-        let uv_stride = vinfo.stride()[1]; // UV plane stride (for NV12)
-        log::info!(
-            "[Video] Strides - Y: {}, UV: {} (width: {})",
-            y_stride,
-            uv_stride,
-            width
-        );
+        let (width, height, framerate, y_stride, uv_stride) = if let Some(caps) = caps {
+            log::info!("[Video] Got caps: {:?}", caps);
+            let s = cleanup!(caps.structure(0).ok_or(Error::Caps))?;
+            let width = cleanup!(s.get::<i32>("width").map_err(|_| Error::Caps))?;
+            let height = cleanup!(s.get::<i32>("height").map_err(|_| Error::Caps))?;
+            let framerate = cleanup!(s.get::<gst::Fraction>("framerate").map_err(|_| Error::Caps))?;
+            let mut framerate = framerate.numer() as f64 / framerate.denom() as f64;
 
-        // For live streams (like HLS), framerate may be 0/1 (variable/unknown)
-        // In this case, use a reasonable default framerate
-        if framerate.is_nan()
-            || framerate.is_infinite()
-            || framerate < 0.0
-            || framerate.abs() < f64::EPSILON
-        {
-            log::warn!(
-                "[Video] Framerate is {}, using default 30.0 fps for live stream",
-                framerate
+            // Obtain video info from caps for NV12 format (to get stride info)
+            let vinfo = cleanup!(gst_video::VideoInfo::from_caps(&caps).map_err(|_| Error::Caps))?;
+            let y_stride = vinfo.stride()[0]; // Y plane stride
+            let uv_stride = vinfo.stride()[1]; // UV plane stride (for NV12)
+            log::info!(
+                "[Video] Strides - Y: {}, UV: {} (width: {})",
+                y_stride,
+                uv_stride,
+                width
             );
-            framerate = 30.0; // Default to 30fps for live streams
-        }
-        log::info!("[Video] Using framerate: {} fps", framerate);
+
+            // For live streams (like HLS), framerate may be 0/1 (variable/unknown)
+            // In this case, use a reasonable default framerate
+            if framerate.is_nan()
+                || framerate.is_infinite()
+                || framerate < 0.0
+                || framerate.abs() < f64::EPSILON
+            {
+                log::warn!(
+                    "[Video] Framerate is {}, using default 30.0 fps for live stream",
+                    framerate
+                );
+                framerate = 30.0; // Default to 30fps for live streams
+            }
+            log::info!("[Video] Using framerate: {} fps", framerate);
+            (width, height, framerate, y_stride, uv_stride)
+        } else {
+            log::warn!(
+                "[Video] Caps not ready after startup, using defaults until first frame"
+            );
+            (1, 1, 30.0, 1, 1)
+        };
 
         let duration = Duration::from_nanos(
             pipeline
@@ -843,6 +871,45 @@ impl Video {
             inner.y_stride as u32,
             inner.uv_stride as u32,
         )
+    }
+
+    /// Update cached metadata from caps if available.
+    pub fn update_meta_from_caps(&self, caps: &gst::Caps) {
+        let Some(s) = caps.structure(0) else {
+            return;
+        };
+
+        let mut inner = self.write();
+        if let Ok(width) = s.get::<i32>("width") {
+            if width > 0 {
+                inner.width = width;
+            }
+        }
+        if let Ok(height) = s.get::<i32>("height") {
+            if height > 0 {
+                inner.height = height;
+            }
+        }
+
+        if let Ok(framerate) = s.get::<gst::Fraction>("framerate") {
+            let mut framerate = framerate.numer() as f64 / framerate.denom() as f64;
+            if framerate.is_nan()
+                || framerate.is_infinite()
+                || framerate < 0.0
+                || framerate.abs() < f64::EPSILON
+            {
+                framerate = 30.0;
+            }
+            inner.framerate = framerate;
+        }
+
+        if let Ok(vinfo) = gst_video::VideoInfo::from_caps(caps) {
+            let strides = vinfo.stride();
+            if strides.len() > 1 {
+                inner.y_stride = strides[0];
+                inner.uv_stride = strides[1];
+            }
+        }
     }
 
     /// Returns true if a new frame arrived since last check and resets the flag.

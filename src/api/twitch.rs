@@ -7,6 +7,7 @@ use anyhow::Result;
 use log::info;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 // Twitch internal GQL client ID (required for GQL API access - custom client IDs don't work)
@@ -233,12 +234,27 @@ fn parse_hls_attributes(attrs: &str) -> Vec<(&str, &str)> {
 
 /// Twitch API client
 pub struct TwitchClient {
-    pub client: reqwest::Client,
+    pub client: Arc<reqwest::Client>,
     pub access_token: Option<String>,
     device_id: String,
 }
 
 impl TwitchClient {
+    fn shared_client() -> Arc<reqwest::Client> {
+        static HTTP_CLIENT: OnceLock<Arc<reqwest::Client>> = OnceLock::new();
+        HTTP_CLIENT
+            .get_or_init(|| {
+                Arc::new(
+                    reqwest::Client::builder()
+                        .user_agent(CHROME_UA)
+                        .tcp_nodelay(true)
+                        .build()
+                        .expect("Failed to build HTTP client"),
+                )
+            })
+            .clone()
+    }
+
     /// Create a new Twitch client
     pub fn new(access_token: Option<String>, device_id: Option<String>) -> Self {
         let device_id = device_id.unwrap_or_else(|| {
@@ -252,11 +268,7 @@ impl TwitchClient {
 
         info!("TwitchClient using device_id: {}", device_id);
 
-        let client = reqwest::Client::builder()
-            .user_agent(CHROME_UA)
-            .tcp_nodelay(true)
-            .build()
-            .expect("Failed to build HTTP client");
+        let client = Self::shared_client();
 
         Self {
             client,

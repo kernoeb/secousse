@@ -14,7 +14,7 @@ mod views;
 
 use app::SecousseApp;
 use gpui::*;
-use gpui_component::Root;
+use gpui_component::{Root, Theme, ThemeRegistry};
 use log::info;
 use state::Settings;
 use std::sync::OnceLock;
@@ -75,6 +75,9 @@ fn main() {
     let _runtime = tokio_runtime();
     info!("Tokio runtime initialized");
 
+    // Warm up GStreamer in the background to reduce first-play latency
+    video::warmup_gstreamer();
+
     // Load settings
     let settings = Settings::load();
     info!("Loaded settings from {:?}", Settings::settings_path());
@@ -94,6 +97,26 @@ fn main() {
 
         // Initialize GPUI Component
         gpui_component::init(cx);
+
+        // Force a dark theme if available
+        let theme_name = SharedString::from("Ayu Dark");
+        let registry = ThemeRegistry::global(cx);
+        let theme = registry
+            .themes()
+            .get(&theme_name)
+            .cloned()
+            .or_else(|| {
+                registry
+                    .themes()
+                    .iter()
+                    .find(|(name, _)| name.as_ref().to_ascii_lowercase().contains("dark"))
+                    .map(|(_, theme)| theme.clone())
+            });
+        if let Some(theme) = theme {
+            Theme::global_mut(cx).apply_config(&theme);
+        } else {
+            log::warn!("No dark theme found in registry");
+        }
 
         // Register keybindings
         actions::register_keybindings(cx);

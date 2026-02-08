@@ -2,12 +2,12 @@
 //!
 //! This is the root view that contains the entire application layout.
 
-use gpui::prelude::{FluentBuilder, StyledImage};
+use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, StyledImage};
 use gpui::*;
 use gpui::Corner;
 use log::{error, info};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::actions;
 use crate::api::{start_oauth_flow, StreamQuality, TwitchClient};
@@ -16,6 +16,9 @@ use crate::theme;
 use crate::video::{Video, VideoOptions};
 use crate::views::{ChatView, ChatViewEvent, NavbarEvent, NavbarView, SidebarEvent, SidebarView};
 use async_compat::Compat;
+use async_channel::bounded;
+use futures::future::{select, Either};
+use futures::FutureExt;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::popover::Popover;
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
@@ -45,10 +48,16 @@ pub struct SecousseApp {
     selected_quality_index: usize,
     /// Whether auto quality is selected
     quality_auto: bool,
+    /// Whether user manually selected a quality
+    quality_manual_override: bool,
     /// Whether quality menu is open
     quality_menu_open: bool,
     /// Master playlist URL (for quality switching)
     master_playlist_url: Option<String>,
+    /// Current stream URL in use
+    current_stream_url: Option<String>,
+    /// Whether we are waiting to auto-switch from master to best quality
+    awaiting_quality_auto_switch: bool,
     /// Current volume level (0.0 to 1.0)
     volume: f64,
     /// Whether audio is muted
@@ -200,8 +209,11 @@ impl SecousseApp {
             stream_qualities: Vec::new(),
             selected_quality_index: 0,
             quality_auto: false,
+            quality_manual_override: false,
             quality_menu_open: false,
             master_playlist_url: None,
+            current_stream_url: None,
+            awaiting_quality_auto_switch: false,
             volume: 1.0,
             is_muted: false,
             volume_slider,
@@ -824,6 +836,7 @@ impl SecousseApp {
         let login = login.to_string();
 
         cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+            let start = Instant::now();
             // Get the client config
             let (access_token, device_id) = {
                 let guard = client.lock().ok();
@@ -844,43 +857,101 @@ impl SecousseApp {
                     let master_url = api_client.get_usher_url(&login, &token);
                     info!("Got master HLS URL: {}", master_url);
 
-                    // Fetch available qualities
-                    let qualities_result =
-                        Compat::new(api_client.get_stream_qualities(&master_url)).await;
+                    let _ = cx.update(|cx: &mut App| {
+                        this.update(cx, |this: &mut SecousseApp, cx| {
+                            this.master_playlist_url = Some(master_url.clone());
+                            this.stream_qualities.clear();
+                            this.selected_quality_index = 0;
+                            this.quality_auto = true;
+                            this.quality_manual_override = false;
+                            this.current_stream_url = None;
+                            this.awaiting_quality_auto_switch = false;
+                            cx.notify();
+                        })
+                        .ok();
+                    });
 
-                    let qualities = match qualities_result {
-                        Ok(q) if !q.is_empty() => {
-                            info!("Found {} quality options", q.len());
-                            for (i, quality) in q.iter().enumerate() {
-                                info!(
-                                    "  Quality {}: {} ({})",
-                                    i,
-                                    quality.name,
-                                    quality.display_name()
-                                );
+                    let qualities_master = master_url.clone();
+                    let qualities_access_token = access_token.clone();
+                    let qualities_device_id = device_id.clone();
+                    let qualities_this = this.clone();
+                    let (qualities_tx, qualities_rx) = bounded::<Vec<StreamQuality>>(1);
+                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                        let api_client =
+                            TwitchClient::new(qualities_access_token, Some(qualities_device_id));
+                        let qualities_result =
+                            Compat::new(api_client.get_stream_qualities(&qualities_master)).await;
+
+                        match qualities_result {
+                            Ok(q) if !q.is_empty() => {
+                                let _ = qualities_tx.send(q.clone()).await;
+                                info!("Found {} quality options", q.len());
+                                for (i, quality) in q.iter().enumerate() {
+                                    info!(
+                                        "  Quality {}: {} ({})",
+                                        i,
+                                        quality.name,
+                                        quality.display_name()
+                                    );
+                                }
+
+                                let _ = cx.update(|cx: &mut App| {
+                                    qualities_this.update(cx, |this: &mut SecousseApp, cx| {
+                                        this.stream_qualities = q;
+                                        this.selected_quality_index = 0;
+                                        let should_switch = this.awaiting_quality_auto_switch
+                                            && this.quality_auto
+                                            && !this.quality_manual_override;
+                                        if should_switch {
+                                            this.switch_quality_auto(cx);
+                                            this.awaiting_quality_auto_switch = false;
+                                        }
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                });
                             }
-                            q
+                            Ok(_) => {
+                                info!("No qualities found, using master playlist directly");
+                            }
+                            Err(e) => {
+                                error!("Failed to fetch qualities: {}", e);
+                            }
                         }
-                        Ok(_) => {
-                            info!("No qualities found, using master playlist directly");
-                            Vec::new()
-                        }
-                        Err(e) => {
-                            error!("Failed to fetch qualities: {}", e);
-                            Vec::new()
-                        }
-                    };
+                    })
+                    .detach();
+                    let mut stream_url = master_url.clone();
+                    let timeout = smol::Timer::after(Duration::from_millis(250)).fuse();
+                    let qualities_wait = qualities_rx.recv().fuse();
+                    futures::pin_mut!(timeout, qualities_wait);
 
-                    // Determine which URL to use
-                    let stream_url = if !qualities.is_empty() {
-                        // Use the first (highest) quality by default
-                        qualities[0].url.clone()
-                    } else {
-                        // Fallback to master playlist
-                        master_url.clone()
-                    };
+                    match select(qualities_wait, timeout).await {
+                        Either::Left((Ok(q), _)) if !q.is_empty() => {
+                            stream_url = q[0].url.clone();
+                        }
+                        _ => {}
+                    }
 
                     info!("Using stream URL: {}", stream_url);
+
+                    let intended_url = stream_url.clone();
+                    let _ = cx.update(|cx: &mut App| {
+                        this.update(cx, |this: &mut SecousseApp, cx| {
+                            this.current_stream_url = Some(intended_url.clone());
+                            this.awaiting_quality_auto_switch =
+                                this.master_playlist_url.as_deref() == Some(intended_url.as_str());
+                            if this.awaiting_quality_auto_switch
+                                && !this.stream_qualities.is_empty()
+                                && this.quality_auto
+                                && !this.quality_manual_override
+                            {
+                                this.switch_quality_auto(cx);
+                                this.awaiting_quality_auto_switch = false;
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                    });
 
                     // Parse the URL first
                     let uri = match url::Url::parse(&stream_url) {
@@ -890,18 +961,6 @@ impl SecousseApp {
                             return;
                         }
                     };
-
-                    // Store qualities in state
-                    let _ = cx.update(|cx: &mut App| {
-                        this.update(cx, |this: &mut SecousseApp, cx| {
-                            this.stream_qualities = qualities;
-                            this.selected_quality_index = 0;
-                            this.quality_auto = this.stream_qualities.is_empty();
-                            this.master_playlist_url = Some(master_url);
-                            cx.notify();
-                        })
-                        .ok();
-                    });
 
                     // Create video player in background thread to avoid blocking main thread
                     // Video::new_with_options() blocks while waiting for GStreamer pipeline
@@ -924,16 +983,18 @@ impl SecousseApp {
                         Ok(video) => {
                             info!("Video player created successfully");
                             let _ = cx.update(|cx: &mut App| {
-                                this.update(cx, |this: &mut SecousseApp, cx| {
-                                    // Apply current volume settings to new video
-                                    video.set_volume(this.volume);
-                                    video.set_muted(this.is_muted);
-                                    this.video = Some(video);
-                                    this.stream_error = None;
-                                    cx.notify();
-                                })
-                                .ok();
+                            this.update(cx, |this: &mut SecousseApp, cx| {
+                                // Apply current volume settings to new video
+                                video.set_volume(this.volume);
+                                video.set_muted(this.is_muted);
+                                this.current_stream_url = Some(stream_url.clone());
+                                this.video = Some(video);
+                                this.stream_error = None;
+                                cx.notify();
+                            })
+                            .ok();
                             });
+                            info!("Playback ready after {}ms", start.elapsed().as_millis());
                         }
                         Err(e) => {
                             error!("Failed to create video player: {:?}", e);
@@ -1006,7 +1067,10 @@ impl SecousseApp {
         let stream_url = self.stream_qualities[quality_index].url.clone();
         self.selected_quality_index = quality_index;
         self.quality_auto = false;
+        self.quality_manual_override = true;
         self.quality_menu_open = false;
+        self.current_stream_url = Some(stream_url.clone());
+        self.awaiting_quality_auto_switch = false;
 
         // Drop current video
         self.video = None;
@@ -1056,18 +1120,26 @@ impl SecousseApp {
     }
 
     fn switch_quality_auto(&mut self, cx: &mut Context<Self>) {
-        if self.quality_auto {
-            self.quality_menu_open = false;
-            cx.notify();
+        let stream_url = if let Some(best) = self.stream_qualities.first() {
+            best.url.clone()
+        } else if let Some(master_url) = self.master_playlist_url.clone() {
+            master_url
+        } else {
             return;
-        }
+        };
 
-        if let Some(best) = self.stream_qualities.first() {
-            let stream_url = best.url.clone();
-            self.selected_quality_index = 0;
-            self.quality_auto = true;
-            self.quality_menu_open = false;
+        self.selected_quality_index = 0;
+        self.quality_auto = true;
+        self.quality_manual_override = false;
+        self.quality_menu_open = false;
+        self.current_stream_url = Some(stream_url.clone());
+        self.awaiting_quality_auto_switch = false;
 
+        // Drop current video
+        self.video = None;
+        cx.notify();
+
+        cx.spawn(async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
             let uri = match url::Url::parse(&stream_url) {
                 Ok(uri) => uri,
                 Err(e) => {
@@ -1076,72 +1148,45 @@ impl SecousseApp {
                 }
             };
 
-            let video_result = Video::new_with_options(
-                &uri,
-                VideoOptions {
-                    frame_buffer_capacity: Some(0),
-                    looping: Some(false),
-                    speed: Some(1.0),
-                },
-            );
+            info!("Creating video player for auto quality...");
+            let video_result = smol::unblock(move || {
+                Video::new_with_options(
+                    &uri,
+                    VideoOptions {
+                        frame_buffer_capacity: Some(0),
+                        looping: Some(false),
+                        speed: Some(1.0),
+                    },
+                )
+            })
+            .await;
 
             match video_result {
                 Ok(video) => {
-                    video.set_volume(self.volume);
-                    video.set_muted(self.is_muted);
-                    self.video = Some(video);
-                    self.stream_error = None;
+                    let _ = cx.update(|cx: &mut App| {
+                        this.update(cx, |this: &mut SecousseApp, cx| {
+                            video.set_volume(this.volume);
+                            video.set_muted(this.is_muted);
+                            this.video = Some(video);
+                            this.stream_error = None;
+                            cx.notify();
+                        })
+                        .ok();
+                    });
                 }
                 Err(e) => {
                     error!("Failed to switch to auto quality: {:?}", e);
-                    self.stream_error = Some(format!("Failed to load stream: {}", e));
+                    let _ = cx.update(|cx: &mut App| {
+                        this.update(cx, |this: &mut SecousseApp, cx| {
+                            this.stream_error = Some(format!("Failed to load stream: {}", e));
+                            cx.notify();
+                        })
+                        .ok();
+                    });
                 }
             }
-
-            cx.notify();
-            return;
-        }
-
-        let Some(master_url) = self.master_playlist_url.clone() else {
-            return;
-        };
-
-        let uri = match url::Url::parse(&master_url) {
-            Ok(uri) => uri,
-            Err(e) => {
-                error!("Failed to parse master URL: {}", e);
-                return;
-            }
-        };
-
-        self.quality_auto = true;
-        self.quality_menu_open = false;
-
-        info!("Switching to auto quality");
-
-        let video_result = Video::new_with_options(
-            &uri,
-            VideoOptions {
-                frame_buffer_capacity: Some(0),
-                looping: Some(false),
-                speed: Some(1.0),
-            },
-        );
-
-        match video_result {
-            Ok(video) => {
-                video.set_volume(self.volume);
-                video.set_muted(self.is_muted);
-                self.video = Some(video);
-                self.stream_error = None;
-            }
-            Err(e) => {
-                error!("Failed to switch to auto quality: {:?}", e);
-                self.stream_error = Some(format!("Failed to load stream: {}", e));
-            }
-        }
-
-        cx.notify();
+        })
+        .detach();
     }
 
     /// Enter a channel - sets up video and chat
@@ -1205,8 +1250,11 @@ impl SecousseApp {
         // Clear quality state
         self.stream_qualities.clear();
         self.selected_quality_index = 0;
+        self.quality_manual_override = false;
         self.quality_menu_open = false;
         self.master_playlist_url = None;
+        self.current_stream_url = None;
+        self.awaiting_quality_auto_switch = false;
 
         // Remove chat view (will disconnect automatically when dropped)
         self.chat_view = None;
@@ -1424,6 +1472,7 @@ impl SecousseApp {
         let channel_display = truncate_with_ellipsis(&channel_for_back, name_chars);
         let follow_enabled =
             is_logged_in && !self.follow_in_flight && self.current_channel_id.is_some();
+        let app_state = self.app_state.clone();
         let is_chat_open = self.app_state.read(cx).is_chat_open;
         let is_fullscreen = self.app_state.read(cx).is_fullscreen;
 
@@ -1449,6 +1498,15 @@ impl SecousseApp {
                             .w_full()
                             .bg(theme::VIDEO_BG)
                             .relative()
+                            .id("video-area")
+                            .on_click(move |event, _window, cx| {
+                                if event.click_count() == 2 {
+                                    app_state.update(cx, |state, cx| {
+                                        state.toggle_fullscreen();
+                                        cx.notify();
+                                    });
+                                }
+                            })
                             // Render video if available, otherwise show loading/error state
                             .when_some(video_instance.clone(), |this, vid| {
                                 this.child(
@@ -1606,7 +1664,7 @@ impl SecousseApp {
                                     }),
                             )
                             // Floating "open chat" button at top-right (only when chat is hidden, not in fullscreen)
-                            .when(!is_chat_open && !is_fullscreen, |el: Div| {
+                            .when(!is_chat_open && !is_fullscreen, |el| {
                                 el.child(
                                     div()
                                         .absolute()
@@ -1632,7 +1690,7 @@ impl SecousseApp {
                             }),
                     )
                     // Stream info bar (hidden in fullscreen)
-                    .when(!is_fullscreen, |el: Div| {
+                    .when(!is_fullscreen, |el| {
                         el.child(
                             div()
                                 .h(px(96.0))
@@ -1772,7 +1830,7 @@ impl SecousseApp {
                         )
                     })
             )
-            .when(is_chat_open && !is_fullscreen, |el: Div| {
+            .when(is_chat_open && !is_fullscreen, |el| {
                 el.child(
                     // Chat panel
                     div()
@@ -2693,7 +2751,7 @@ impl Render for SecousseApp {
                     .flex_1()
                     .overflow_hidden()
                     // Sidebar (hidden in fullscreen)
-                    .when(!is_fullscreen, |el: Div| {
+                    .when(!is_fullscreen, |el| {
                         el.child(
                             div()
                                 .w(px(sidebar_width))

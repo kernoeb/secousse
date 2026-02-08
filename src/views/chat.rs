@@ -104,6 +104,22 @@ impl ChatView {
             third_party_emotes: third_party_emotes.clone(),
         };
 
+        // Load cached emotes first for fast startup
+        {
+            let cached_global = emotes::load_cached_global_emotes();
+            let cached_channel = channel_id
+                .as_deref()
+                .map(emotes::load_cached_channel_emotes)
+                .unwrap_or_default();
+
+            if !cached_global.is_empty() || !cached_channel.is_empty() {
+                let mut map = third_party_emotes.lock().unwrap();
+                for emote in cached_global.into_iter().chain(cached_channel) {
+                    map.insert(emote.name, emote.url);
+                }
+            }
+        }
+
         // Fetch third-party emotes (7TV, BTTV, FFZ) in the background
         if let Some(ch_id) = channel_id {
             cx.spawn(async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {

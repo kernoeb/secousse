@@ -13,6 +13,7 @@ use core_video::pixel_buffer::{
 use gpui::{
     Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Window,
 };
+use gstreamer_video as gst_video;
 
 /// A video element that uses macOS CoreVideo + Metal for zero-copy NV12 rendering.
 ///
@@ -157,7 +158,28 @@ impl VideoElement {
             return;
         }
 
-        let (frame_width, frame_height, y_stride, uv_stride) = self.video.frame_meta();
+        let (frame_width, frame_height, y_stride, uv_stride) = if let Some(caps_ref) = sample.caps()
+        {
+            let caps = caps_ref.to_owned();
+            self.video.update_meta_from_caps(&caps);
+            if let Ok(vinfo) = gst_video::VideoInfo::from_caps(&caps) {
+                let strides = vinfo.stride();
+                if strides.len() > 1 && vinfo.width() > 0 && vinfo.height() > 0 {
+                    (
+                        vinfo.width() as u32,
+                        vinfo.height() as u32,
+                        strides[0] as u32,
+                        strides[1] as u32,
+                    )
+                } else {
+                    self.video.frame_meta()
+                }
+            } else {
+                self.video.frame_meta()
+            }
+        } else {
+            self.video.frame_meta()
+        };
         let width = frame_width as usize;
         let height = frame_height as usize;
         let y_stride_usize = y_stride as usize;

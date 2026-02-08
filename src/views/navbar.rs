@@ -247,6 +247,12 @@ impl NavbarView {
     ) -> impl IntoElement {
         let name = display_name.unwrap_or_else(|| "User".to_string());
         let first_char = name.chars().next().unwrap_or('U').to_string();
+        let logout_variant = ButtonCustomVariant::new(cx)
+            .color(theme::TRANSPARENT.into())
+            .foreground(theme::TEXT_SECONDARY.into())
+            .border(theme::TRANSPARENT.into())
+            .hover(theme::BG_TERTIARY.into())
+            .active(theme::BG_ELEVATED.into());
 
         div()
             .id("user-profile")
@@ -286,7 +292,7 @@ impl NavbarView {
             )
             .child(
                 Button::new("logout-button")
-                    .text()
+                    .custom(logout_variant)
                     .xsmall()
                     .rounded(px(2.0))
                     .label("Logout")

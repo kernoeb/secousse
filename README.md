@@ -2,6 +2,15 @@
 
 A GPU-accelerated Twitch streaming client built with [GPUI](https://gpui.rs/) - the UI framework from Zed.
 
+## Technical Stack
+
+- UI: GPUI + gpui-component
+- Video: GStreamer (app sink pipeline)
+- Networking: reqwest with rustls TLS only
+- Chat: Twitch IRC over WebSocket (tokio-tungstenite)
+- Async: smol in GPUI with tokio bridge (async-compat)
+- Storage: JSON settings under OS app data directory
+
 ## Prerequisites
 
 ### macOS
@@ -75,6 +84,8 @@ secousse-gpui/
 │   ├── app.rs          # Main application view
 │   ├── theme.rs        # Twitch color palette
 │   ├── actions.rs      # Keyboard shortcuts
+│   ├── http.rs          # GPUI HTTP client bridge
+│   ├── assets.rs        # Embedded assets
 │   ├── api/
 │   │   ├── mod.rs
 │   │   ├── twitch.rs   # Twitch GQL/Helix API
@@ -89,8 +100,10 @@ secousse-gpui/
 │   │   ├── mod.rs
 │   │   ├── navbar.rs       # Top navigation
 │   │   └── sidebar.rs      # Followed channels
-│   └── components/
-│       └── mod.rs          # Reusable UI components
+│   └── video/
+│       ├── mod.rs          # Video module
+│       ├── element.rs      # GPUI video element
+│       └── gst_video.rs    # GStreamer pipeline
 └── assets/
     └── icons/              # SVG icons
 ```
@@ -103,12 +116,12 @@ secousse-gpui/
 - [x] IRC chat client
 - [x] Settings persistence
 - [x] Basic UI layout
-- [ ] Video playback (GStreamer)
-- [ ] OAuth authentication flow
-- [ ] Channel search
-- [ ] Browse top streams
-- [ ] Full chat with emotes/badges
-- [ ] Keyboard shortcuts
+- [x] Video playback (GStreamer)
+- [x] OAuth authentication flow
+- [x] Channel search
+- [x] Browse top streams
+- [x] Full chat with emotes/badges
+- [x] Keyboard shortcuts
 
 ## License
 
