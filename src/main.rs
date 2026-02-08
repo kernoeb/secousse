@@ -7,6 +7,7 @@ mod api;
 mod app;
 mod assets;
 mod http;
+mod mock;
 mod state;
 mod theme;
 mod video;

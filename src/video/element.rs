@@ -36,6 +36,9 @@ pub struct VideoElement {
     element_id: Option<ElementId>,
     /// If true, the element will fill its container (using flex: 1)
     fill_container: bool,
+    pixel_buffers: Vec<CVPixelBuffer>,
+    pixel_buffer_index: usize,
+    pixel_buffer_size: Option<(usize, usize)>,
 }
 
 impl VideoElement {
@@ -46,6 +49,9 @@ impl VideoElement {
             display_height: None,
             element_id: None,
             fill_container: true,
+            pixel_buffers: Vec::new(),
+            pixel_buffer_index: 0,
+            pixel_buffer_size: None,
         }
     }
 
@@ -101,7 +107,7 @@ impl VideoElement {
     ///
     /// Maps the sample's buffer read-only in place (zero-copy from GStreamer),
     /// creates a CVPixelBuffer, copies planes into it, and calls `paint_surface`.
-    fn paint_current_frame(&self, window: &mut Window, bounds: gpui::Bounds<gpui::Pixels>) {
+    fn paint_current_frame(&mut self, window: &mut Window, bounds: gpui::Bounds<gpui::Pixels>) {
         // Get the sample without copying pixel data
         let Some(sample) = self.video.take_current_sample() else {
             return;
@@ -154,30 +160,9 @@ impl VideoElement {
             return;
         }
 
-        // Create a CVPixelBuffer with NV12 full-range format.
-        // Must be IOSurface-backed and Metal-compatible for CoreVideo texture cache.
-        let attrs = unsafe {
-            let metal_key = CFString::wrap_under_get_rule(kCVPixelBufferMetalCompatibilityKey);
-            let iosurface_key = CFString::wrap_under_get_rule(kCVPixelBufferIOSurfacePropertiesKey);
-            let empty_dict = CFDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
-
-            CFDictionary::<CFString, CFType>::from_CFType_pairs(&[
-                (metal_key, CFBoolean::true_value().as_CFType()),
-                (iosurface_key, empty_dict.as_CFType()),
-            ])
-        };
-
-        let pixel_buffer = match CVPixelBuffer::new(
-            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-            width,
-            height,
-            Some(&attrs),
-        ) {
-            Ok(pb) => pb,
-            Err(e) => {
-                log::error!("[Video] Failed to create CVPixelBuffer: {:?}", e);
-                return;
-            }
+        let pixel_buffer = match self.next_pixel_buffer(width, height) {
+            Some(buffer) => buffer,
+            None => return,
         };
 
         // Lock the pixel buffer for writing
@@ -233,6 +218,58 @@ impl VideoElement {
         // Compute aspect-fit bounds and paint via the Metal surface path
         let dest_bounds = self.fitted_bounds(bounds, frame_width, frame_height);
         window.paint_surface(dest_bounds, pixel_buffer);
+    }
+
+    fn next_pixel_buffer(&mut self, width: usize, height: usize) -> Option<CVPixelBuffer> {
+        const BUFFER_POOL_SIZE: usize = 8;
+
+        let size_changed = self
+            .pixel_buffer_size
+            .map(|(w, h)| w != width || h != height)
+            .unwrap_or(true);
+        if size_changed || self.pixel_buffers.len() != BUFFER_POOL_SIZE {
+            self.pixel_buffers.clear();
+            self.pixel_buffer_index = 0;
+            self.pixel_buffer_size = Some((width, height));
+
+            // Create CVPixelBuffers with NV12 full-range format.
+            // Must be IOSurface-backed and Metal-compatible for CoreVideo texture cache.
+            let attrs = unsafe {
+                let metal_key = CFString::wrap_under_get_rule(kCVPixelBufferMetalCompatibilityKey);
+                let iosurface_key =
+                    CFString::wrap_under_get_rule(kCVPixelBufferIOSurfacePropertiesKey);
+                let empty_dict = CFDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
+
+                CFDictionary::<CFString, CFType>::from_CFType_pairs(&[
+                    (metal_key, CFBoolean::true_value().as_CFType()),
+                    (iosurface_key, empty_dict.as_CFType()),
+                ])
+            };
+
+            for _ in 0..BUFFER_POOL_SIZE {
+                match CVPixelBuffer::new(
+                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    width,
+                    height,
+                    Some(&attrs),
+                ) {
+                    Ok(pb) => self.pixel_buffers.push(pb),
+                    Err(e) => {
+                        log::error!("[Video] Failed to create CVPixelBuffer: {:?}", e);
+                        self.pixel_buffers.clear();
+                        return None;
+                    }
+                }
+            }
+        }
+
+        if self.pixel_buffers.is_empty() {
+            return None;
+        }
+
+        let buffer = self.pixel_buffers[self.pixel_buffer_index].clone();
+        self.pixel_buffer_index = (self.pixel_buffer_index + 1) % self.pixel_buffers.len();
+        Some(buffer)
     }
 }
 

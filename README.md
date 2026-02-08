@@ -74,6 +74,13 @@ export PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.
 export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
 ```
 
+Runtime toggles:
+
+```bash
+# Run mock stream + high-volume chat with emotes
+SECOUSSE_MOCK=1 cargo run
+```
+
 ## Project Structure
 
 ```

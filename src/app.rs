@@ -194,8 +194,8 @@ impl SecousseApp {
         )
         .detach();
 
-        let app = Self {
-            app_state,
+        let mut app = Self {
+            app_state: app_state.clone(),
             auth_state,
             settings: settings_entity,
             twitch_client,
@@ -231,6 +231,55 @@ impl SecousseApp {
         // Start auto-refresh loops
         app.start_followed_refresh_loop(cx);
         app.start_browse_refresh_loop(cx);
+
+        if crate::mock::enabled() {
+            let app_state = app_state.clone();
+            cx.spawn(
+                async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+                    let start = Instant::now();
+                    let mock_url = url::Url::parse("mock://stream").unwrap();
+                    let video_result = smol::unblock(move || {
+                        Video::new_with_options(&mock_url, VideoOptions::default())
+                    })
+                    .await;
+
+                    let _ = cx.update(|cx: &mut App| {
+                        let _ = this.update(cx, |app: &mut SecousseApp, cx| match video_result {
+                            Ok(video) => {
+                                video.set_volume(app.volume);
+                                video.set_muted(app.is_muted);
+                                app.current_stream_url = Some("mock://stream".to_string());
+                                app.stream_qualities.clear();
+                                app.video = Some(video);
+                                app.stream_error = None;
+                                info!("Playback ready after {}ms", start.elapsed().as_millis());
+                                app_state.update(cx, |state, _| {
+                                    state.set_channel(Some("mock".to_string()));
+                                });
+                            }
+                            Err(e) => {
+                                app.stream_error =
+                                    Some(format!("Failed to load mock stream: {}", e));
+                            }
+                        });
+                    });
+                },
+            )
+            .detach();
+
+            let mock_chat_view =
+                cx.new(|cx| ChatView::new("mock".to_string(), None, None, None, window, cx));
+            cx.subscribe(&mock_chat_view, |this, _chat, event, cx| {
+                if let ChatViewEvent::CloseRequested = event {
+                    this.app_state.update(cx, |state, cx| {
+                        state.toggle_chat();
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+            app.chat_view = Some(mock_chat_view);
+        }
 
         app
     }
@@ -664,7 +713,7 @@ impl SecousseApp {
         let auth_state = self.auth_state.clone();
 
         cx.spawn(
-            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
                 loop {
                     smol::Timer::after(Duration::from_secs(60)).await;
 
@@ -676,16 +725,34 @@ impl SecousseApp {
                             let device_id = auth.device_id.clone();
                             let access_token = auth.access_token.clone();
                             let is_loading = app_state.read(cx).is_loading_followed;
-                            (is_logged_in, user_id, device_id, access_token, is_loading)
+                            let is_streaming = this
+                                .update(cx, |app: &mut SecousseApp, _| app.video.is_some())
+                                .ok()
+                                .unwrap_or(false);
+                            (
+                                is_logged_in,
+                                user_id,
+                                device_id,
+                                access_token,
+                                is_loading,
+                                is_streaming,
+                            )
                         })
                         .ok();
 
-                    let Some((is_logged_in, user_id, device_id, access_token, is_loading)) = state
+                    let Some((
+                        is_logged_in,
+                        user_id,
+                        device_id,
+                        access_token,
+                        is_loading,
+                        is_streaming,
+                    )) = state
                     else {
                         break;
                     };
 
-                    if !is_logged_in || user_id.is_none() || is_loading {
+                    if !is_logged_in || user_id.is_none() || is_loading || is_streaming {
                         continue;
                     }
 
@@ -747,7 +814,7 @@ impl SecousseApp {
         let client = self.twitch_client.clone();
 
         cx.spawn(
-            async move |_this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
+            async move |this: gpui::WeakEntity<SecousseApp>, cx: &mut gpui::AsyncApp| {
                 loop {
                     smol::Timer::after(Duration::from_secs(60)).await;
 
@@ -757,15 +824,19 @@ impl SecousseApp {
                             let should_refresh =
                                 app.active_tab == ActiveTab::Browse && !app.is_loading_browse;
                             let search_active = app.search_active;
-                            (should_refresh, search_active)
+                            let is_streaming = this
+                                .update(cx, |app: &mut SecousseApp, _| app.video.is_some())
+                                .ok()
+                                .unwrap_or(false);
+                            (should_refresh, search_active, is_streaming)
                         })
                         .ok();
 
-                    let Some((should_refresh, search_active)) = state else {
+                    let Some((should_refresh, search_active, is_streaming)) = state else {
                         break;
                     };
 
-                    if !should_refresh || search_active {
+                    if !should_refresh || search_active || is_streaming {
                         continue;
                     }
 
@@ -926,10 +997,10 @@ impl SecousseApp {
                                             .update(cx, |this: &mut SecousseApp, cx| {
                                                 this.stream_qualities = q;
                                                 this.selected_quality_index = 0;
-                                                let should_switch = this
-                                                    .awaiting_quality_auto_switch
-                                                    && this.quality_auto
-                                                    && !this.quality_manual_override;
+                                                let should_switch = this.quality_auto
+                                                    && !this.quality_manual_override
+                                                    && this.current_stream_url.as_deref()
+                                                        == this.master_playlist_url.as_deref();
                                                 if should_switch {
                                                     this.switch_quality_auto(cx);
                                                     this.awaiting_quality_auto_switch = false;

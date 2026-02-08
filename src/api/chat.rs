@@ -41,8 +41,6 @@ pub struct ChatConnection {
 pub enum ChatEvent {
     /// A new chat message was received
     Message(ChatMessage),
-    /// A notice was received (slow mode, sub only, etc.)
-    Notice(String),
     /// Connection was established
     Connected,
     /// Connection was lost
@@ -117,11 +115,8 @@ pub async fn connect_chat(
                                 parsed.channel = channel_for_read.clone();
                                 let _ = tx_in_read.send(ChatEvent::Message(parsed)).await;
                             }
-                        } else if line.contains("NOTICE") {
-                            info!("[Chat] Notice: {}", line);
-                            let _ = tx_in_read.send(ChatEvent::Notice(line.to_string())).await;
-                        } else if line.contains("USERNOTICE") {
-                            info!("[Chat] UserNotice: {}", line);
+                        } else if line.contains("NOTICE") || line.contains("USERNOTICE") {
+                            // Ignore notices to reduce chat churn
                         }
                     }
                 }

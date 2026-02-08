@@ -134,8 +134,22 @@ impl Video {
     pub fn new_with_options(uri: &url::Url, options: VideoOptions) -> Result<Self, Error> {
         gst::init()?;
 
+        if crate::mock::enabled() {
+            let pipeline = "videotestsrc is-live=true pattern=smpte ! videoscale ! videoconvert ! video/x-raw,format=NV12,width=1920,height=1080,framerate=60/1 ! appsink name=gpui_video drop=true max-buffers=3 enable-last-sample=false";
+            let pipeline = gst::parse::launch(pipeline)?
+                .downcast::<gst::Pipeline>()
+                .map_err(|_| Error::Cast)?;
+            let video_sink = pipeline
+                .by_name("gpui_video")
+                .ok_or(Error::Cast)?
+                .downcast::<gst_app::AppSink>()
+                .map_err(|_| Error::Cast)?;
+
+            return Self::from_gst_pipeline_with_options(pipeline, video_sink, None, options);
+        }
+
         let pipeline = format!(
-            "playbin uri=\"{}\" video-sink=\"videoscale ! videoconvert ! appsink name=gpui_video drop=true max-buffers=3 enable-last-sample=false caps=video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
+            "playbin uri=\"{}\" buffer-size=10485760 buffer-duration=2000000000 video-sink=\"videoscale ! videoconvert ! appsink name=gpui_video drop=true max-buffers=3 enable-last-sample=false caps=video/x-raw,format=NV12,pixel-aspect-ratio=1/1\"",
             uri.as_str()
         );
         let pipeline = gst::parse::launch(pipeline.as_ref())?
@@ -517,7 +531,9 @@ impl Video {
     pub fn set_volume(&self, volume: f64) {
         {
             let inner = self.write();
-            inner.source.set_property("volume", volume);
+            if inner.source.find_property("volume").is_some() {
+                inner.source.set_property("volume", volume);
+            }
         }
         let muted = self.muted();
         self.set_muted(muted);
@@ -525,12 +541,20 @@ impl Video {
 
     /// Set if the audio is muted or not.
     pub fn set_muted(&self, muted: bool) {
-        self.write().source.set_property("mute", muted);
+        let inner = self.write();
+        if inner.source.find_property("mute").is_some() {
+            inner.source.set_property("mute", muted);
+        }
     }
 
     /// Get if the audio is muted or not.
     pub fn muted(&self) -> bool {
-        self.read().source.property("mute")
+        let inner = self.read();
+        if inner.source.find_property("mute").is_some() {
+            inner.source.property("mute")
+        } else {
+            false
+        }
     }
 
     /// Get if the stream ended or not.

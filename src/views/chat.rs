@@ -4,16 +4,20 @@
 //! Twitch, 7TV, BTTV, and FFZ.
 
 use async_compat::Compat;
+use futures::FutureExt;
 use gpui::*;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Icon, IconName, Sizable};
 use log::{error, info};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::api::chat::{ChatEvent, ChatMessage};
 use crate::api::emotes;
+use crate::mock;
 use crate::theme;
 
 const MAX_MESSAGES: usize = 150;
@@ -43,6 +47,12 @@ pub struct ChatView {
     chat_input: Entity<InputState>,
     /// Third-party emote map: emote name → image URL (7TV, BTTV, FFZ)
     third_party_emotes: Arc<Mutex<HashMap<String, String>>>,
+    /// Cached message fragments to avoid re-parsing on every render
+    message_fragments: Arc<Mutex<HashMap<String, CachedFragments>>>,
+    /// Throttle chat UI updates to avoid per-message reflow
+    notify_scheduled: Arc<AtomicBool>,
+    /// Bounded image cache for chat emotes
+    emote_image_cache: Entity<EmoteImageCache>,
 }
 
 /// Events emitted by chat view
@@ -92,6 +102,9 @@ impl ChatView {
         let list_state = ListState::new(0, ListAlignment::Bottom, px(200.0));
 
         let third_party_emotes = Arc::new(Mutex::new(HashMap::new()));
+        let message_fragments = Arc::new(Mutex::new(HashMap::new()));
+        let notify_scheduled = Arc::new(AtomicBool::new(false));
+        let emote_image_cache = EmoteImageCache::new(cx);
 
         let mut view = Self {
             channel: channel.clone(),
@@ -104,6 +117,9 @@ impl ChatView {
             last_message_count: 0,
             chat_input,
             third_party_emotes: third_party_emotes.clone(),
+            message_fragments: message_fragments.clone(),
+            notify_scheduled: notify_scheduled.clone(),
+            emote_image_cache,
         };
 
         // Load cached emotes first for fast startup
@@ -153,6 +169,9 @@ impl ChatView {
                         }
                     }
 
+                    // Emote map changed; clear cached message fragments
+                    message_fragments.lock().unwrap().clear();
+
                     // Notify to re-render messages with emotes
                     let _ = cx.update(|cx: &mut App| {
                         let _ = this.update(cx, |_view: &mut ChatView, cx| {
@@ -164,8 +183,68 @@ impl ChatView {
             .detach();
         }
 
-        // Start connection
-        view.connect(cx);
+        // Start connection or mock chat
+        if mock::enabled() {
+            view.is_connected = true;
+            cx.notify();
+
+            let messages = view.messages.clone();
+            let fragments_cache = view.message_fragments.clone();
+            let notify_scheduled = view.notify_scheduled.clone();
+            let channel = view.channel.clone();
+            let unique_emotes = true;
+            cx.spawn(
+                async move |this: gpui::WeakEntity<ChatView>, cx: &mut gpui::AsyncApp| {
+                    let interval = Duration::from_millis(1000 / mock::chat_rate().max(1));
+                    let mut counter: u64 = 0;
+                    loop {
+                        let (message, emotes) = if unique_emotes {
+                            let label = format!("emote{}", counter);
+                            let end = label.len().saturating_sub(1);
+                            (label.clone(), vec![(format!("mock-{counter}"), 0, end)])
+                        } else {
+                            (
+                                "Kappa hello from mock".to_string(),
+                                vec![("25".to_string(), 0, 4)],
+                            )
+                        };
+
+                        let msg = ChatMessage {
+                            id: format!("mock-{}", counter),
+                            user: "MockUser".to_string(),
+                            message,
+                            color: Some("#1e90ff".to_string()),
+                            badges: Vec::new(),
+                            channel: channel.clone(),
+                            emotes,
+                        };
+                        counter = counter.wrapping_add(1);
+
+                        enqueue_chat_message(
+                            msg,
+                            &messages,
+                            &fragments_cache,
+                            &notify_scheduled,
+                            cx,
+                            &this,
+                        );
+
+                        let alive = cx
+                            .update(|cx: &mut App| this.update(cx, |_view, _cx| {}).is_ok())
+                            .ok()
+                            .unwrap_or(false);
+                        if !alive {
+                            break;
+                        }
+
+                        smol::Timer::after(interval).await;
+                    }
+                },
+            )
+            .detach();
+        } else {
+            view.connect(cx);
+        }
 
         view
     }
@@ -176,6 +255,8 @@ impl ChatView {
         let access_token = self.access_token.clone();
         let username = self.username.clone();
         let messages = self.messages.clone();
+        let fragments_cache = self.message_fragments.clone();
+        let notify_scheduled = self.notify_scheduled.clone();
 
         info!("[ChatView] Connecting to #{}", channel);
 
@@ -214,21 +295,14 @@ impl ChatView {
                             while let Ok(event) = connection.receiver.recv().await {
                                 match event {
                                     ChatEvent::Message(msg) => {
-                                        let mut msgs = messages.lock().unwrap();
-                                        msgs.push_back(msg);
-                                        while msgs.len() > MAX_MESSAGES {
-                                            msgs.pop_front();
-                                        }
-                                        drop(msgs);
-
-                                        let _ = cx.update(|cx: &mut App| {
-                                            let _ = this.update(cx, |_view: &mut ChatView, cx| {
-                                                cx.notify();
-                                            });
-                                        });
-                                    }
-                                    ChatEvent::Notice(notice) => {
-                                        info!("[ChatView] Notice: {}", notice);
+                                        enqueue_chat_message(
+                                            msg,
+                                            &messages,
+                                            &fragments_cache,
+                                            &notify_scheduled,
+                                            cx,
+                                            &this,
+                                        );
                                     }
                                     ChatEvent::Connected => {
                                         info!("[ChatView] Connection confirmed");
@@ -320,7 +394,9 @@ impl ChatView {
             let mut msgs = self.messages.lock().unwrap();
             msgs.push_back(local_message);
             while msgs.len() > MAX_MESSAGES {
-                msgs.pop_front();
+                if let Some(old) = msgs.pop_front() {
+                    self.message_fragments.lock().unwrap().remove(&old.id);
+                }
             }
             self.last_message_count = msgs.len();
         }
@@ -358,6 +434,145 @@ impl ChatView {
     }
 }
 
+fn enqueue_chat_message(
+    msg: ChatMessage,
+    messages: &Arc<Mutex<VecDeque<ChatMessage>>>,
+    fragments_cache: &Arc<Mutex<HashMap<String, CachedFragments>>>,
+    notify_scheduled: &Arc<AtomicBool>,
+    cx: &mut gpui::AsyncApp,
+    this: &gpui::WeakEntity<ChatView>,
+) {
+    let mut msgs = messages.lock().unwrap();
+    msgs.push_back(msg);
+    while msgs.len() > MAX_MESSAGES {
+        if let Some(old) = msgs.pop_front() {
+            fragments_cache.lock().unwrap().remove(&old.id);
+        }
+    }
+    drop(msgs);
+
+    if !notify_scheduled.swap(true, Ordering::SeqCst) {
+        let notify_scheduled = notify_scheduled.clone();
+        let this = this.clone();
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            smol::Timer::after(Duration::from_millis(100)).await;
+            let _ = cx.update(|cx: &mut App| {
+                let _ = this.update(cx, |_view: &mut ChatView, cx: &mut Context<ChatView>| {
+                    cx.notify();
+                });
+            });
+            notify_scheduled.store(false, Ordering::SeqCst);
+        })
+        .detach();
+    }
+}
+
+fn emote_cache_limit() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("SECOUSSE_EMOTE_CACHE_LIMIT")
+            .ok()
+            .and_then(|val| val.parse::<usize>().ok())
+            .filter(|val| *val > 0)
+            .unwrap_or(256)
+    })
+}
+
+fn emote_scale() -> &'static str {
+    static SCALE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    SCALE.get_or_init(|| match std::env::var("SECOUSSE_EMOTE_SCALE").as_deref() {
+        Ok("2") | Ok("2.0") => "2.0",
+        Ok("1") | Ok("1.0") => "1.0",
+        _ => "1.0",
+    })
+}
+
+struct EmoteImageCache {
+    items: HashMap<u64, ImageCacheItem>,
+    order: VecDeque<u64>,
+    max_images: usize,
+}
+
+impl EmoteImageCache {
+    fn new(cx: &mut App) -> Entity<Self> {
+        let max_images = emote_cache_limit();
+        let entity = cx.new(|_cx| Self {
+            items: HashMap::new(),
+            order: VecDeque::new(),
+            max_images,
+        });
+
+        cx.observe_release(&entity, |cache, cx| {
+            for (_, mut item) in std::mem::take(&mut cache.items) {
+                if let Some(Ok(image)) = item.get() {
+                    cx.drop_image(image, None);
+                }
+            }
+            cache.order.clear();
+        })
+        .detach();
+
+        entity
+    }
+
+    fn touch(&mut self, hash: u64) {
+        self.order.retain(|existing| *existing != hash);
+        self.order.push_back(hash);
+    }
+
+    fn evict_if_needed(&mut self, window: &mut Window, cx: &mut App) {
+        while self.items.len() >= self.max_images {
+            let Some(old_hash) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(mut item) = self.items.remove(&old_hash)
+                && let Some(Ok(image)) = item.get()
+            {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+}
+
+impl ImageCache for EmoteImageCache {
+    fn load(
+        &mut self,
+        resource: &Resource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        let hash = hash(resource);
+
+        if let Some(item) = self.items.get_mut(&hash) {
+            let result = item.get();
+            self.touch(hash);
+            return result;
+        }
+
+        self.evict_if_needed(window, cx);
+
+        let fut = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
+        let task = cx.background_executor().spawn(fut).shared();
+        self.items
+            .insert(hash, ImageCacheItem::Loading(task.clone()));
+        self.order.push_back(hash);
+
+        let entity = window.current_view();
+        window
+            .spawn(cx, {
+                async move |cx| {
+                    _ = task.await;
+                    cx.on_next_frame(move |_, cx| {
+                        cx.notify(entity);
+                    });
+                }
+            })
+            .detach();
+
+        None
+    }
+}
+
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_connected = self.is_connected;
@@ -373,11 +588,43 @@ impl Render for ChatView {
         // The closure is called ONLY for visible items (+ overdraw) — not all 150.
         let messages_ref = self.messages.clone();
         let emotes_ref = self.third_party_emotes.clone();
+        let fragments_cache = self.message_fragments.clone();
+        let emote_image_cache = self.emote_image_cache.clone();
         let chat_list = list(self.list_state.clone(), move |ix, _window, _cx| {
             let msgs = messages_ref.lock().unwrap();
             if let Some(msg) = msgs.get(ix) {
-                let emote_map = emotes_ref.lock().unwrap();
-                render_message(msg, &emote_map).into_any_element()
+                let cached = {
+                    let mut cache = fragments_cache.lock().unwrap();
+                    if let Some(existing) = cache.get(&msg.id) {
+                        existing.clone()
+                    } else {
+                        let emote_map = emotes_ref.lock().unwrap();
+                        let fragments =
+                            build_message_fragments(&msg.message, &msg.emotes, &emote_map);
+                        let has_emotes = fragments
+                            .iter()
+                            .any(|f| matches!(f, MessageFragment::Emote { .. }));
+                        let cached = CachedFragments {
+                            fragments: Arc::new(fragments),
+                            has_emotes,
+                        };
+                        cache.insert(msg.id.clone(), cached.clone());
+                        cached
+                    }
+                };
+                let color = msg
+                    .color
+                    .as_deref()
+                    .and_then(parse_hex_color)
+                    .unwrap_or(theme::TWITCH_PURPLE);
+                render_message_with_fragments(
+                    msg,
+                    color,
+                    cached.fragments.clone(),
+                    cached.has_emotes,
+                    emote_image_cache.clone(),
+                )
+                .into_any_element()
             } else {
                 div().into_any_element()
             }
@@ -530,37 +777,28 @@ impl Render for ChatView {
 }
 
 /// A fragment of a chat message: either text or an emote image.
+#[derive(Clone)]
 enum MessageFragment {
-    Text(String),
-    Emote { url: String },
+    Text(SharedString),
+    Emote {
+        url: SharedString,
+        label: SharedString,
+    },
 }
 
-/// Render a single chat message with inline emote images.
-///
-/// Strategy:
-/// 1. Build a set of Twitch-native emote ranges from `msg.emotes` (position-based).
-/// 2. Walk through the message: for each word that isn't a native emote, check the
-///    third-party emote map (7TV/BTTV/FFZ).
-/// 3. Produce a flex-wrap div with text spans and `img()` elements.
-fn render_message(
+#[derive(Clone)]
+struct CachedFragments {
+    fragments: Arc<Vec<MessageFragment>>,
+    has_emotes: bool,
+}
+
+fn render_message_with_fragments(
     msg: &ChatMessage,
-    third_party_emotes: &HashMap<String, String>,
+    color: Rgba,
+    fragments: Arc<Vec<MessageFragment>>,
+    has_emotes: bool,
+    emote_image_cache: Entity<EmoteImageCache>,
 ) -> impl IntoElement {
-    let color = msg
-        .color
-        .as_deref()
-        .and_then(parse_hex_color)
-        .unwrap_or(theme::TWITCH_PURPLE);
-
-    // --- Build fragments from message body ---
-    let fragments = build_message_fragments(&msg.message, &msg.emotes, third_party_emotes);
-
-    // Check if the message has any emotes at all
-    let has_emotes = fragments
-        .iter()
-        .any(|f| matches!(f, MessageFragment::Emote { .. }));
-
-    // If no emotes, use the fast StyledText path (no flex-wrap overhead)
     if !has_emotes {
         let username_part = format!("{}: ", msg.user);
         let full_text = format!("{}{}", username_part, msg.message);
@@ -584,7 +822,6 @@ fn render_message(
             .into_any_element();
     }
 
-    // --- Emotes present: use flex-wrap layout ---
     let mut row = div()
         .id(SharedString::from(format!("msg-{}", msg.id)))
         .w_full()
@@ -596,7 +833,6 @@ fn render_message(
         .flex_wrap()
         .items_center();
 
-    // Username prefix
     row = row.child(
         div()
             .text_color(color)
@@ -605,18 +841,19 @@ fn render_message(
             .child(format!("{}: ", msg.user)),
     );
 
-    // Message fragments
-    for fragment in fragments {
+    for fragment in fragments.iter().cloned() {
         match fragment {
             MessageFragment::Text(text) => {
-                row = row.child(div().child(text));
+                row = row.child(div().child(text.clone()));
             }
-            MessageFragment::Emote { url } => {
+            MessageFragment::Emote { url, label } => {
                 row = row.child(
-                    img(SharedString::from(url))
+                    img(url.clone())
+                        .image_cache(&emote_image_cache)
                         .w(px(EMOTE_SIZE))
                         .h(px(EMOTE_SIZE))
-                        .flex_shrink_0(),
+                        .flex_shrink_0()
+                        .with_fallback(move || div().child(label.clone()).into_any_element()),
                 );
             }
         }
@@ -664,11 +901,12 @@ fn build_fragments_with_twitch_emotes(
         }
 
         // Twitch native emote
-        let url = format!(
-            "https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/2.0",
-            emote_id
-        );
-        fragments.push(MessageFragment::Emote { url });
+        let url = mock::emote_url_for_id(emote_id, emote_scale());
+        let label = &message[start..end];
+        fragments.push(MessageFragment::Emote {
+            url: SharedString::from(url),
+            label: SharedString::from(label.to_string()),
+        });
         cursor = end;
     }
 
@@ -704,7 +942,7 @@ fn build_fragments_word_match(
     if third_party.is_empty() {
         // Fast path: no third-party emotes loaded (yet)
         if !text.is_empty() {
-            return vec![MessageFragment::Text(text.to_string())];
+            return vec![MessageFragment::Text(SharedString::from(text.to_string()))];
         }
         return vec![];
     }
@@ -717,10 +955,15 @@ fn build_fragments_word_match(
         if let Some(url) = third_party.get(trimmed) {
             // Flush accumulated text
             if !pending_text.is_empty() {
-                fragments.push(MessageFragment::Text(pending_text.clone()));
+                fragments.push(MessageFragment::Text(SharedString::from(
+                    pending_text.clone(),
+                )));
                 pending_text.clear();
             }
-            fragments.push(MessageFragment::Emote { url: url.clone() });
+            fragments.push(MessageFragment::Emote {
+                url: SharedString::from(url.clone()),
+                label: SharedString::from(trimmed.to_string()),
+            });
             // Preserve trailing space after emote
             if word.ends_with(' ') {
                 pending_text.push(' ');
@@ -731,7 +974,7 @@ fn build_fragments_word_match(
     }
 
     if !pending_text.is_empty() {
-        fragments.push(MessageFragment::Text(pending_text));
+        fragments.push(MessageFragment::Text(SharedString::from(pending_text)));
     }
 
     fragments
