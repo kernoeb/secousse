@@ -4,18 +4,22 @@
 
 use gpui::prelude::{FluentBuilder, StyledImage};
 use gpui::*;
+use gpui::Corner;
 use log::{error, info};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::actions;
-use crate::api::{StreamQuality, TwitchClient, start_oauth_flow};
-use crate::components::icon::{Icon, IconName};
+use crate::api::{start_oauth_flow, StreamQuality, TwitchClient};
 use crate::state::{ActiveTab, AppState, AuthState, FollowedChannel, Settings};
 use crate::theme;
 use crate::video::{Video, VideoOptions};
 use crate::views::{ChatView, ChatViewEvent, NavbarEvent, NavbarView, SidebarEvent, SidebarView};
 use async_compat::Compat;
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::popover::Popover;
+use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
+use gpui_component::{v_virtual_list, Disableable, Icon, IconName, Selectable, Sizable, VirtualListScrollHandle};
 
 /// The root application view
 pub struct SecousseApp {
@@ -39,6 +43,8 @@ pub struct SecousseApp {
     stream_qualities: Vec<StreamQuality>,
     /// Currently selected quality index
     selected_quality_index: usize,
+    /// Whether auto quality is selected
+    quality_auto: bool,
     /// Whether quality menu is open
     quality_menu_open: bool,
     /// Master playlist URL (for quality switching)
@@ -47,8 +53,10 @@ pub struct SecousseApp {
     volume: f64,
     /// Whether audio is muted
     is_muted: bool,
-    /// Whether volume slider is being dragged
-    volume_dragging: bool,
+    /// Volume slider state
+    volume_slider: Entity<SliderState>,
+    /// Scroll handle for browse virtual list
+    browse_scroll_handle: VirtualListScrollHandle,
 
     /// Current channel ID (used for follow actions)
     current_channel_id: Option<String>,
@@ -65,7 +73,7 @@ pub struct SecousseApp {
 
 impl SecousseApp {
     /// Create a new application instance
-    pub fn new(settings: Settings, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
         info!("Initializing SecousseApp...");
 
         // Get or create device ID
@@ -97,15 +105,16 @@ impl SecousseApp {
 
         // Create navbar view
         let navbar =
-            cx.new(|cx| NavbarView::new(app_state.clone(), auth_state.clone(), cx));
+            cx.new(|cx| NavbarView::new(app_state.clone(), auth_state.clone(), window, cx));
 
         // Create sidebar view
         let sidebar = cx.new(|_| SidebarView::new(app_state.clone()));
 
         // Subscribe to navbar events
-        cx.subscribe(
+        cx.subscribe_in(
             &navbar,
-            |this, _navbar, event: &NavbarEvent, cx| match event {
+            window,
+            |this, _navbar, event: &NavbarEvent, _window, cx| match event {
                 NavbarEvent::LoginRequested => {
                     info!("Received LoginRequested event from navbar");
                     this.start_login(cx);
@@ -144,15 +153,39 @@ impl SecousseApp {
         .detach();
 
         // Subscribe to sidebar events
-        cx.subscribe(
+        cx.subscribe_in(
             &sidebar,
-            |this, _sidebar, event: &SidebarEvent, cx| match event {
+            window,
+            |this, _sidebar, event: &SidebarEvent, window, cx| match event {
                 SidebarEvent::ChannelSelected(channel) => {
                     info!("Channel selected from sidebar: {}", channel);
-                    this.enter_channel(channel.clone(), cx);
+                    this.enter_channel(channel.clone(), window, cx);
                 }
             },
         )
+        .detach();
+
+        let volume_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.01)
+                .default_value(1.0)
+        });
+
+        cx.subscribe_in(&volume_slider, window, |this, state, event: &SliderEvent, window, cx| {
+            let value = match event {
+                SliderEvent::Change(value) => value,
+            };
+            let raw = value.start() as f64;
+            let snapped = if raw >= 0.95 { 1.0 } else { raw };
+            this.set_volume(snapped, cx);
+            if (snapped - raw).abs() > f64::EPSILON {
+                state.update(cx, |state, cx| {
+                    state.set_value(SliderValue::from(snapped as f32), window, cx);
+                });
+            }
+        })
         .detach();
 
         let app = Self {
@@ -166,11 +199,13 @@ impl SecousseApp {
             chat_view: None,
             stream_qualities: Vec::new(),
             selected_quality_index: 0,
+            quality_auto: false,
             quality_menu_open: false,
             master_playlist_url: None,
             volume: 1.0,
             is_muted: false,
-            volume_dragging: false,
+            volume_slider,
+            browse_scroll_handle: VirtualListScrollHandle::new(),
 
             current_channel_id: None,
             is_following_current: None,
@@ -861,6 +896,7 @@ impl SecousseApp {
                         this.update(cx, |this: &mut SecousseApp, cx| {
                             this.stream_qualities = qualities;
                             this.selected_quality_index = 0;
+                            this.quality_auto = this.stream_qualities.is_empty();
                             this.master_playlist_url = Some(master_url);
                             cx.notify();
                         })
@@ -949,7 +985,14 @@ impl SecousseApp {
             return;
         }
 
-        if quality_index == self.selected_quality_index {
+        let quality = &self.stream_qualities[quality_index];
+        let name = quality.name.to_lowercase();
+        if quality.resolution.is_none() && (name.contains("source") || name.contains("chunked")) {
+            self.switch_quality_auto(cx);
+            return;
+        }
+
+        if !self.quality_auto && quality_index == self.selected_quality_index {
             self.quality_menu_open = false;
             cx.notify();
             return;
@@ -962,6 +1005,7 @@ impl SecousseApp {
 
         let stream_url = self.stream_qualities[quality_index].url.clone();
         self.selected_quality_index = quality_index;
+        self.quality_auto = false;
         self.quality_menu_open = false;
 
         // Drop current video
@@ -1011,8 +1055,97 @@ impl SecousseApp {
         .detach();
     }
 
+    fn switch_quality_auto(&mut self, cx: &mut Context<Self>) {
+        if self.quality_auto {
+            self.quality_menu_open = false;
+            cx.notify();
+            return;
+        }
+
+        if let Some(best) = self.stream_qualities.first() {
+            let stream_url = best.url.clone();
+            self.selected_quality_index = 0;
+            self.quality_auto = true;
+            self.quality_menu_open = false;
+
+            let uri = match url::Url::parse(&stream_url) {
+                Ok(uri) => uri,
+                Err(e) => {
+                    error!("Failed to parse stream URL: {}", e);
+                    return;
+                }
+            };
+
+            let video_result = Video::new_with_options(
+                &uri,
+                VideoOptions {
+                    frame_buffer_capacity: Some(0),
+                    looping: Some(false),
+                    speed: Some(1.0),
+                },
+            );
+
+            match video_result {
+                Ok(video) => {
+                    video.set_volume(self.volume);
+                    video.set_muted(self.is_muted);
+                    self.video = Some(video);
+                    self.stream_error = None;
+                }
+                Err(e) => {
+                    error!("Failed to switch to auto quality: {:?}", e);
+                    self.stream_error = Some(format!("Failed to load stream: {}", e));
+                }
+            }
+
+            cx.notify();
+            return;
+        }
+
+        let Some(master_url) = self.master_playlist_url.clone() else {
+            return;
+        };
+
+        let uri = match url::Url::parse(&master_url) {
+            Ok(uri) => uri,
+            Err(e) => {
+                error!("Failed to parse master URL: {}", e);
+                return;
+            }
+        };
+
+        self.quality_auto = true;
+        self.quality_menu_open = false;
+
+        info!("Switching to auto quality");
+
+        let video_result = Video::new_with_options(
+            &uri,
+            VideoOptions {
+                frame_buffer_capacity: Some(0),
+                looping: Some(false),
+                speed: Some(1.0),
+            },
+        );
+
+        match video_result {
+            Ok(video) => {
+                video.set_volume(self.volume);
+                video.set_muted(self.is_muted);
+                self.video = Some(video);
+                self.stream_error = None;
+            }
+            Err(e) => {
+                error!("Failed to switch to auto quality: {:?}", e);
+                self.stream_error = Some(format!("Failed to load stream: {}", e));
+            }
+        }
+
+        cx.notify();
+    }
+
     /// Enter a channel - sets up video and chat
-    fn enter_channel(&mut self, channel: String, cx: &mut Context<Self>) {
+    fn enter_channel(&mut self, channel: String, window: &mut Window, cx: &mut Context<Self>) {
         info!("Entering channel: {}", channel);
 
         // Stop any currently active stream before starting the new one
@@ -1033,7 +1166,7 @@ impl SecousseApp {
         // Create chat view with emote support
         let chat_channel = channel.clone();
         let chat_view = cx.new(|cx| {
-            ChatView::new(chat_channel, channel_id, access_token, username, cx)
+            ChatView::new(chat_channel, channel_id, access_token, username, window, cx)
         });
         cx.subscribe(&chat_view, |this, _chat, event, cx| {
             if let ChatViewEvent::CloseRequested = event {
@@ -1203,12 +1336,12 @@ impl SecousseApp {
     }
 
     /// Render the main content area based on current tab and channel
-    fn render_main_content(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_main_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let app_state = self.app_state.read(cx);
 
         if let Some(channel) = &app_state.current_channel {
             // Channel view (video + chat)
-            self.render_channel_view(channel.clone(), cx)
+            self.render_channel_view(channel.clone(), window, cx)
                 .into_any_element()
         } else if app_state.search_active {
             // Search results view
@@ -1216,14 +1349,14 @@ impl SecousseApp {
         } else {
             // Tab-based view (Following or Browse)
             match app_state.active_tab {
-                ActiveTab::Following => self.render_following_tab(cx).into_any_element(),
-                ActiveTab::Browse => self.render_browse_tab(cx).into_any_element(),
+                ActiveTab::Following => self.render_following_tab(window, cx).into_any_element(),
+                ActiveTab::Browse => self.render_browse_tab(window, cx).into_any_element(),
             }
         }
     }
 
     /// Render the channel view with video player and chat
-    fn render_channel_view(&self, channel: String, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_channel_view(&self, channel: String, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Get video instance and stream error
         let video_instance = self.video.clone();
         let stream_error = self.stream_error.clone();
@@ -1233,24 +1366,16 @@ impl SecousseApp {
             .unwrap_or(false);
         let channel_for_back = channel.clone();
         let channel_info = self.current_channel_info(&channel, cx);
-        let stream_title = truncate_with_ellipsis(
-            &channel_info
-                .as_ref()
-                .and_then(|c| c.stream_title.as_deref())
-                .unwrap_or("Live stream"),
-            100,
-        );
-        let game_name = truncate_with_ellipsis(
-            &channel_info
-                .as_ref()
-                .and_then(|c| c.game_name.as_deref())
-                .unwrap_or("Just Chatting"),
-            60,
-        );
-        let viewer_count = channel_info
+        let raw_stream_title = channel_info
             .as_ref()
-            .and_then(|c| c.viewer_count)
-            .unwrap_or(0);
+            .and_then(|c| c.stream_title.as_deref())
+            .unwrap_or("Live stream");
+        let raw_game_name = channel_info
+            .as_ref()
+            .and_then(|c| c.game_name.as_deref())
+            .unwrap_or("Just Chatting");
+        let viewer_count = channel_info.as_ref().and_then(|c| c.viewer_count);
+        let is_live = stream_error.is_none() && viewer_count.unwrap_or(0) > 0;
         let avatar_url = channel_info
             .as_ref()
             .and_then(|c| c.profile_image_url.clone());
@@ -1264,6 +1389,39 @@ impl SecousseApp {
         } else {
             "Follow"
         };
+        let app_state = self.app_state.read(cx);
+        let sidebar_width = if app_state.is_sidebar_open {
+            theme::SIDEBAR_WIDTH
+        } else {
+            theme::SIDEBAR_COLLAPSED_WIDTH
+        };
+        let chat_width = if app_state.is_chat_open && !app_state.is_fullscreen {
+            theme::CHAT_WIDTH
+        } else {
+            0.0
+        };
+        let total_width = f32::from(window.bounds().size.width)
+            - f32::from(sidebar_width)
+            - chat_width;
+        let follow_label_len = follow_label.chars().count() as f32;
+        let follow_button_width = 72.0 + follow_label_len * 6.5;
+        let left_padding = 32.0;
+        let avatar_block = 48.0 + 12.0;
+        let inner_gap = 16.0;
+        let safety_padding = 64.0;
+        let available_text_width = (total_width
+            - left_padding
+            - follow_button_width
+            - avatar_block
+            - inner_gap
+            - safety_padding)
+            .max(120.0);
+        let title_chars = ((available_text_width / 7.5).floor() as usize).max(24);
+        let name_chars = ((available_text_width / 9.0).floor() as usize).max(18);
+        let game_chars = ((available_text_width / 9.0).floor() as usize).max(16);
+        let stream_title = truncate_with_ellipsis(raw_stream_title, title_chars);
+        let game_name = truncate_with_ellipsis(raw_game_name, game_chars);
+        let channel_display = truncate_with_ellipsis(&channel_for_back, name_chars);
         let follow_enabled =
             is_logged_in && !self.follow_in_flight && self.current_channel_id.is_some();
         let is_chat_open = self.app_state.read(cx).is_chat_open;
@@ -1355,26 +1513,26 @@ impl SecousseApp {
                                             .child({
                                                 let video = video_instance.clone();
                                                 div()
-                                                    .id("pause-btn")
-                                                    .px(px(16.0))
-                                                    .py(px(8.0))
-                                                    .bg(rgba(0x000000b3)) // 0.7 alpha = 0xb3
-                                                    .hover(|style| style.bg(rgba(0x000000e6))) // 0.9 alpha = 0xe6
-                                                    .rounded(px(4.0))
-                                                    .cursor_pointer()
-                                                    .text_color(theme::TEXT_PRIMARY)
-                                                    .text_size(px(13.0))
-                                                    .on_click(move |_event, _window, _cx| {
-                                                        if let Some(video) = &video {
-                                                            let paused = video.paused();
-                                                            video.set_paused(!paused);
-                                                        }
-                                                    })
-                                                    .child(if is_playing {
-                                                        Icon::new(IconName::Pause).size_4().color(theme::TEXT_PRIMARY).into_any_element()
-                                                    } else {
-                                                        Icon::new(IconName::Play).size_4().color(theme::TEXT_PRIMARY).into_any_element()
-                                                    })
+                                                    .bg(rgba(0x000000b3))
+                                                    .hover(|style| style.bg(rgba(0x000000e6)))
+                                                    .rounded(px(2.0))
+                                                    .child(
+                                                        Button::new("pause-btn")
+                                                            .ghost()
+                                                            .compact()
+                                                            .rounded(px(2.0))
+                                                            .icon(if is_playing {
+                                                                Icon::empty().path("icons/pause.svg").small()
+                                                            } else {
+                                                                Icon::empty().path("icons/play.svg").small()
+                                                            })
+                                                            .on_click(move |_event, _window, _cx| {
+                                                                if let Some(video) = &video {
+                                                                    let paused = video.paused();
+                                                                    video.set_paused(!paused);
+                                                                }
+                                                            }),
+                                                    )
                                             })
                                             // Quality selector
                                             .child(self.render_quality_selector(cx))
@@ -1384,27 +1542,25 @@ impl SecousseApp {
                                     // Fullscreen toggle button (right side)
                                     .child(
                                         div()
-                                            .id("fullscreen-btn")
-                                            .px(px(16.0))
-                                            .py(px(8.0))
                                             .bg(rgba(0x000000b3))
                                             .hover(|style| style.bg(rgba(0x000000e6)))
-                                            .rounded(px(4.0))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.app_state.update(cx, |state, cx| {
-                                                    state.toggle_fullscreen();
-                                                    cx.notify();
-                                                });
-                                            }))
+                                            .rounded(px(2.0))
                                             .child(
-                                                Icon::new(if is_fullscreen {
-                                                    IconName::Minimize
-                                                } else {
-                                                    IconName::Maximize
-                                                })
-                                                .size_4()
-                                                .color(theme::TEXT_PRIMARY),
+                                                Button::new("fullscreen-btn")
+                                                    .ghost()
+                                                    .compact()
+                                                    .rounded(px(2.0))
+                                                    .icon(if is_fullscreen {
+                                                        IconName::Minimize
+                                                    } else {
+                                                        IconName::Maximize
+                                                    })
+                                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                                        this.app_state.update(cx, |state, cx| {
+                                                            state.toggle_fullscreen();
+                                                            cx.notify();
+                                                        });
+                                                    })),
                                             ),
                                     ),
                             )
@@ -1421,47 +1577,56 @@ impl SecousseApp {
                                         div()
                                             .px(px(6.0))
                                             .py(px(2.0))
-                                            .bg(theme::LIVE_RED)
-                                            .rounded(px(4.0))
-                                            .text_color(gpui::white())
+                                            .bg(if is_live {
+                                                theme::LIVE_RED
+                                            } else {
+                                                theme::BG_TERTIARY
+                                            })
+                                            .rounded(px(2.0))
+                                            .text_color(if is_live {
+                                                gpui::white()
+                                            } else {
+                                                theme::TEXT_PRIMARY.into()
+                                            })
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::BOLD)
-                                            .child("LIVE"),
+                                            .child(if is_live { "LIVE" } else { "OFFLINE" }),
                                     )
-                                    .child(
-                                        div()
-                                            .px(px(8.0))
-                                            .py(px(2.0))
-                                            .bg(rgba(0x000000b3))
-                                            .rounded(px(4.0))
-                                            .text_color(theme::TEXT_PRIMARY)
-                                            .text_size(px(12.0))
-                                            .child(format_viewer_count(viewer_count)),
-                                    ),
+                                    .when(is_live, |el| {
+                                        el.child(
+                                            div()
+                                                .px(px(8.0))
+                                                .py(px(2.0))
+                                                .bg(rgba(0x000000b3))
+                                                .rounded(px(2.0))
+                                                .text_color(theme::TEXT_PRIMARY)
+                                                .text_size(px(12.0))
+                                                .child(format_viewer_count(viewer_count.unwrap_or(0))),
+                                        )
+                                    }),
                             )
                             // Floating "open chat" button at top-right (only when chat is hidden, not in fullscreen)
                             .when(!is_chat_open && !is_fullscreen, |el: Div| {
                                 el.child(
                                     div()
-                                        .id("floating-chat-toggle")
                                         .absolute()
                                         .top(px(16.0))
                                         .right(px(16.0))
-                                        .p(px(8.0))
                                         .bg(rgba(0x000000b3))
                                         .hover(|s| s.bg(rgba(0x000000e6)))
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.app_state.update(cx, |state, cx| {
-                                                state.toggle_chat();
-                                                cx.notify();
-                                            });
-                                        }))
+                                        .rounded(px(2.0))
                                         .child(
-                                            Icon::new(IconName::PanelRight)
-                                                .size_4()
-                                                .color(theme::TEXT_PRIMARY),
+                                            Button::new("floating-chat-toggle")
+                                                .ghost()
+                                                .compact()
+                                                .rounded(px(2.0))
+                                                .icon(IconName::PanelRight)
+                                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                                    this.app_state.update(cx, |state, cx| {
+                                                        state.toggle_chat();
+                                                        cx.notify();
+                                                    });
+                                                })),
                                         ),
                                 )
                             }),
@@ -1488,6 +1653,8 @@ impl SecousseApp {
                                     .flex()
                                     .items_center()
                                     .gap(px(12.0))
+                                    .flex_1()
+                                    .min_w(px(0.0))
                                     .child(if let Some(url) = avatar_url {
                                         div()
                                             .size(px(48.0))
@@ -1498,7 +1665,8 @@ impl SecousseApp {
                                                 img(url)
                                                     .w_full()
                                                     .h_full()
-                                                    .object_fit(ObjectFit::Cover),
+                                                    .object_fit(ObjectFit::Cover)
+                                                    .rounded_full(),
                                             )
                                             .into_any_element()
                                     } else {
@@ -1525,12 +1693,16 @@ impl SecousseApp {
                                         div()
                                             .flex_col()
                                             .gap(px(4.0))
+                                            .flex_1()
+                                            .min_w(px(0.0))
                                             .child(
                                                 div()
                                                     .text_color(theme::TEXT_PRIMARY)
                                                     .text_size(px(16.0))
                                                     .font_weight(FontWeight::BOLD)
-                                                    .child(channel_for_back.clone()),
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .child(channel_display),
                                             )
                                             .child(
                                                 div()
@@ -1549,7 +1721,7 @@ impl SecousseApp {
                                                         div()
                                                             .text_color(theme::TEXT_SECONDARY)
                                                             .text_size(px(12.0))
-                                                            .child(game_name),
+                                                        .child(game_name),
                                                     ),
                                             ),
                                     ),
@@ -1559,56 +1731,42 @@ impl SecousseApp {
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
+                                    .flex_shrink_0()
                                     // Follow button
                                     .child(
-                                        div()
-                                            .id("follow-btn")
-                                            .px(px(14.0))
-                                            .py(px(8.0))
-                                            .bg(if follow_enabled {
-                                                if self.is_following_current == Some(true) {
-                                                    theme::BG_TERTIARY
+                                        {
+                                            let mut button = Button::new("follow-btn")
+                                                .small()
+                                                .rounded(px(2.0))
+                                                .label(follow_label)
+                                                .icon(if self.is_following_current == Some(true) {
+                                                    Icon::new(IconName::Heart).text_color(theme::LIVE_RED)
                                                 } else {
-                                                    theme::TWITCH_PURPLE
-                                                }
+                                                    Icon::new(IconName::Heart)
+                                                })
+                                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                                    if this.follow_in_flight
+                                                        || this.current_channel_id.is_none()
+                                                    {
+                                                        return;
+                                                    }
+                                                    if this.auth_state.read(cx).is_logged_in {
+                                                        this.toggle_follow(cx);
+                                                    }
+                                                }));
+
+                                            if self.is_following_current == Some(true) {
+                                                button = button.selected(true);
                                             } else {
-                                                theme::BG_TERTIARY
-                                            })
-                                            .hover(|s| {
-                                                if follow_enabled {
-                                                    s.bg(theme::TWITCH_PURPLE_HOVER)
-                                                } else {
-                                                    s
-                                                }
-                                            })
-                                            .rounded(px(6.0))
-                                            .cursor_pointer()
-                                            .text_color(if follow_enabled {
-                                                theme::TEXT_PRIMARY
-                                            } else {
-                                                theme::TEXT_DISABLED
-                                            })
-                                            .text_size(px(12.0))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                if this.follow_in_flight
-                                                    || this.current_channel_id.is_none()
-                                                {
-                                                    return;
-                                                }
-                                                if this.auth_state.read(cx).is_logged_in {
-                                                    this.toggle_follow(cx);
-                                                }
-                                            }))
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.0))
-                                            .child(if self.is_following_current == Some(true) {
-                                                Icon::new(IconName::Heart).size_4().color(theme::LIVE_RED).into_any_element()
-                                            } else {
-                                                Icon::new(IconName::Heart).size_4().color(theme::TEXT_PRIMARY).into_any_element()
-                                            })
-                                            .child(follow_label),
+                                                button = button.primary();
+                                            }
+
+                                            if !follow_enabled {
+                                                button = button.disabled(true);
+                                            }
+
+                                            button
+                                        },
                                     ),
                             ),
                         )
@@ -1649,6 +1807,8 @@ impl SecousseApp {
         let qualities: Vec<StreamQuality> = self.stream_qualities.clone();
         let selected_index = self.selected_quality_index;
         let menu_open = self.quality_menu_open;
+        let quality_auto = self.quality_auto;
+        let quality_labels: Vec<String> = qualities.iter().map(Self::quality_label).collect();
 
         if qualities.is_empty() {
             // No qualities available yet
@@ -1657,129 +1817,245 @@ impl SecousseApp {
                 .px(px(16.0))
                 .py(px(8.0))
                 .bg(rgba(0x000000b3))
-                .rounded(px(4.0))
+                .rounded(px(2.0))
                 .text_color(theme::TEXT_SECONDARY)
                 .text_size(px(13.0))
                 .child("Auto")
                 .into_any_element();
         }
 
-        let current_quality = &qualities[selected_index];
-        let display_name = current_quality.display_name();
+        let display_name = if self.quality_auto {
+            "Auto".to_string()
+        } else if let Some(current_quality) = qualities.get(selected_index) {
+            Self::quality_label(current_quality)
+        } else {
+            "Auto".to_string()
+        };
 
-        div()
-            .id("quality-selector")
-            .relative()
-            .child(
-                // Quality button
-                div()
-                    .id("quality-btn")
-                    .px(px(16.0))
-                    .py(px(8.0))
-                    .bg(if menu_open {
+        {
+            let view = cx.entity().clone();
+            let trigger_variant = ButtonCustomVariant::new(cx)
+                .color(
+                    (if menu_open {
                         rgba(0x000000e6)
                     } else {
                         rgba(0x000000b3)
                     })
-                    .hover(|style| style.bg(rgba(0x000000e6)))
-                    .rounded(px(4.0))
-                    .cursor_pointer()
-                    .text_color(theme::TEXT_PRIMARY)
-                    .text_size(px(13.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.quality_menu_open = !this.quality_menu_open;
-                        cx.notify();
-                    }))
-                    .child(display_name)
-                    .child(if menu_open {
-                        Icon::new(IconName::ChevronDown).size_3p5().color(theme::TEXT_PRIMARY).into_any_element()
-                    } else {
-                        Icon::new(IconName::ChevronUp).size_3p5().color(theme::TEXT_PRIMARY).into_any_element()
-                    }),
-            )
-            // Dropdown menu (shown above the button)
-            .when(menu_open, |container| {
-                let mut menu = div()
-                    .absolute()
-                    .bottom(px(44.0)) // Position above the button
-                    .left_0()
-                    .min_w(px(150.0))
-                    .bg(rgba(0x000000e6))
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(theme::BORDER_SUBTLE)
-                    .py(px(4.0))
-                    .flex()
-                    .flex_col();
+                        .into(),
+                )
+                .foreground(theme::TEXT_PRIMARY.into())
+                .border(theme::TRANSPARENT.into())
+                .hover(rgba(0x000000e6).into())
+                .active(rgba(0x000000e6).into());
 
-                for (i, quality) in qualities.iter().enumerate() {
-                    let is_selected = i == selected_index;
-                    let quality_name = quality.display_name();
+            Popover::new("quality-popover")
+                .anchor(Corner::BottomLeft)
+                .open(menu_open)
+                .on_open_change(cx.listener(|this, open: &bool, _window, cx| {
+                    this.quality_menu_open = *open;
+                    cx.notify();
+                }))
+                .trigger(
+                    Button::new("quality-btn")
+                        .custom(trigger_variant)
+                        .compact()
+                        .rounded(px(2.0))
+                        .label(display_name)
+                        .dropdown_caret(true)
+                        .selected(menu_open),
+                )
+                .content(move |_, window, _cx| {
+                    let mut menu = div()
+                        .w(px(200.0))
+                        .bg(theme::BG_ELEVATED)
+                        .border_1()
+                        .border_color(theme::BORDER_SUBTLE)
+                        .rounded(px(6.0))
+                        .shadow_lg()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .text_color(theme::TEXT_PRIMARY)
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Video quality"),
+                        );
 
+                    let auto_selected = quality_auto;
                     menu = menu.child(
-                        div()
-                            .id(SharedString::from(format!("quality-option-{}", i)))
+                        Button::new("quality-option-auto")
+                            .text()
+                            .rounded(px(0.0))
                             .px(px(12.0))
-                            .py(px(8.0))
-                            .cursor_pointer()
-                            .bg(if is_selected {
-                                theme::SELECTED_BG
-                            } else {
-                                theme::TRANSPARENT
-                            })
-                            .hover(|style| style.bg(theme::BG_TERTIARY))
-                            .text_color(if is_selected {
-                                theme::TWITCH_PURPLE
-                            } else {
-                                theme::TEXT_PRIMARY
-                            })
+                            .py(px(6.0))
+                            .w_full()
+                            .justify_start()
                             .text_size(px(13.0))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.switch_quality(i, cx);
-                            }))
-                            .child(quality_name),
+                            .text_color(if auto_selected {
+                                theme::TEXT_PRIMARY
+                            } else {
+                                theme::TEXT_SECONDARY
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.0))
+                                    .child(if auto_selected {
+                                        div()
+                                            .size(px(16.0))
+                                            .rounded_full()
+                                            .border_2()
+                                            .border_color(theme::TWITCH_PURPLE)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .size(px(8.0))
+                                                    .rounded_full()
+                                                    .bg(theme::TWITCH_PURPLE),
+                                            )
+                                    } else {
+                                        div()
+                                            .size(px(16.0))
+                                            .rounded_full()
+                                            .border_2()
+                                            .border_color(theme::TEXT_DISABLED)
+                                    })
+                                    .child("Auto"),
+                            )
+                            .on_click(window.listener_for(&view, |this, _event, _window, cx| {
+                                this.switch_quality_auto(cx);
+                                this.quality_menu_open = false;
+                                cx.notify();
+                            })),
                     );
-                }
 
-                container.child(menu)
-            })
-            .into_any_element()
+                    for (i, quality_name) in quality_labels.iter().enumerate() {
+                        let is_selected = !quality_auto && i == selected_index;
+                        if quality_name == "Auto" {
+                            continue;
+                        }
+                        if quality_name == "Source" {
+                            continue;
+                        }
+                        let view = view.clone();
+                        menu = menu.child(
+                            Button::new(("quality-option", i))
+                                .text()
+                                .rounded(px(0.0))
+                                .px(px(12.0))
+                                .py(px(6.0))
+                                .w_full()
+                                .justify_start()
+                                .text_size(px(13.0))
+                                .text_color(if is_selected {
+                                    theme::TEXT_PRIMARY
+                                } else {
+                                    theme::TEXT_SECONDARY
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.0))
+                                        .child(if is_selected {
+                                            div()
+                                                .size(px(16.0))
+                                                .rounded_full()
+                                                .border_2()
+                                                .border_color(theme::TWITCH_PURPLE)
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .size(px(8.0))
+                                                        .rounded_full()
+                                                        .bg(theme::TWITCH_PURPLE),
+                                                )
+                                        } else {
+                                            div()
+                                                .size(px(16.0))
+                                                .rounded_full()
+                                                .border_2()
+                                                .border_color(theme::TEXT_DISABLED)
+                                        })
+                                        .child(quality_name.clone()),
+                                )
+                                .on_click(window.listener_for(&view, move |this, _event, _window, cx| {
+                                    this.switch_quality(i, cx);
+                                    this.quality_menu_open = false;
+                                    cx.notify();
+                                })),
+                        );
+                    }
+
+                    menu
+                })
+                .into_any_element()
+        }
+    }
+
+    fn quality_label(quality: &StreamQuality) -> String {
+        if quality.name == "audio_only" {
+            return "Audio Only".to_string();
+        }
+
+        let lower_name = quality.name.to_lowercase();
+        if quality.resolution.is_none() && (lower_name.contains("source") || lower_name.contains("chunked")) {
+            return "Source".to_string();
+        }
+
+        let mut base = if let Some(resolution) = &quality.resolution {
+            let height = resolution
+                .split('x')
+                .nth(1)
+                .and_then(|h| h.parse::<u32>().ok());
+            if let Some(h) = height {
+                format!("{}p", h)
+            } else {
+                quality.name.clone()
+            }
+        } else {
+            quality.name.clone()
+        };
+
+        if let Some(fps) = quality.framerate {
+            let fps = fps.round() as u32;
+            if fps > 0 {
+                base.push_str(&format!("{}", fps));
+            }
+        } else if quality.name.contains("p") {
+            base = quality.name.clone();
+        }
+
+        if lower_name.contains("source") || lower_name.contains("chunked") {
+            base.push_str(" (Source)");
+        }
+
+        if base.ends_with("bps") {
+            "Source".to_string()
+        } else {
+            base
+        }
     }
 
     /// Render a modern compact volume control (icon + short slider).
-    ///
-    /// Design:
-    /// - 80px track, 4px visible height, 20px click-target height (easy to grab)
-    /// - Snaps to 100 % when within 5 % of max so you never struggle to hit full volume
-    /// - 3-tier icon: VolumeX / Volume1 / Volume2
-    /// - No knob, no percentage label — clean filled-track style (Twitch / YouTube)
     fn render_volume_control(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current_volume = self.volume;
         let is_muted = self.is_muted;
-        let effective = if is_muted { 0.0 } else { current_volume };
 
         let volume_icon = if is_muted || current_volume == 0.0 {
-            IconName::VolumeX
+            Icon::empty().path("icons/volume-x.svg")
         } else if current_volume < 0.5 {
-            IconName::Volume1
+            Icon::empty().path("icons/volume-1.svg")
         } else {
-            IconName::Volume2
+            Icon::empty().path("icons/volume-2.svg")
         };
-
-        // Track geometry
-        let track_w: f32 = 80.0;
-        let track_h: f32 = 4.0;
-        let hit_h: f32 = 20.0; // invisible click area height
-        let fill_w = (track_w * effective as f32).clamp(0.0, track_w);
-
-        // Shared mutable left-edge captured by the canvas prepaint.
-        let slider_left = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
-        let sl_canvas = slider_left.clone();
-        let sl_down = slider_left.clone();
-        let sl_move = slider_left.clone();
 
         div()
             .id("volume-control")
@@ -1790,102 +2066,27 @@ impl SecousseApp {
             .py(px(6.0))
             .bg(rgba(0x000000b3))
             .hover(|s| s.bg(rgba(0x000000e6)))
-            .rounded(px(4.0))
-            // — Mute / unmute icon —
+            .rounded(px(2.0))
             .child(
-                div()
-                    .id("mute-btn")
-                    .cursor_pointer()
+                Button::new("mute-btn")
+                    .ghost()
+                    .xsmall()
+                    .rounded(px(2.0))
+                    .icon(volume_icon.small())
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.is_muted = !this.is_muted;
                         if let Some(video) = &this.video {
                             video.set_muted(this.is_muted);
                         }
                         cx.notify();
-                    }))
-                    .child(Icon::new(volume_icon).size_4().color(theme::TEXT_PRIMARY)),
+                    })),
             )
-            // — Slider —
             .child(
                 div()
                     .id("volume-slider")
-                    .w(px(track_w))
-                    .h(px(hit_h))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .relative()
-                    // Canvas overlay to capture left-edge position in window coords
-                    .child(
-                        gpui::canvas(
-                            move |bounds: Bounds<Pixels>, _window: &mut Window, _cx: &mut App| {
-                                sl_canvas.set(f32::from(bounds.origin.x));
-                            },
-                            |_: Bounds<Pixels>, _: (), _: &mut Window, _: &mut App| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                            this.volume_dragging = true;
-                            let x = f32::from(event.position.x);
-                            let ratio = ((x - sl_down.get()) / track_w).clamp(0.0, 1.0);
-                            this.set_volume_snapped(ratio as f64, cx);
-                        }),
-                    )
-                    .on_mouse_move(
-                        cx.listener(move |this, event: &MouseMoveEvent, _window, cx| {
-                            if !this.volume_dragging {
-                                return;
-                            }
-                            let x = f32::from(event.position.x);
-                            let ratio = ((x - sl_move.get()) / track_w).clamp(0.0, 1.0);
-                            this.set_volume_snapped(ratio as f64, cx);
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _event, _window, cx| {
-                            this.volume_dragging = false;
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _event, _window, cx| {
-                            this.volume_dragging = false;
-                            cx.notify();
-                        }),
-                    )
-                    // Visible track (background)
-                    .child(
-                        div()
-                            .w(px(track_w))
-                            .h(px(track_h))
-                            .rounded(px(999.0))
-                            .bg(rgba(0xffffff33)) // subtle white 20 %
-                            .relative()
-                            // Filled portion
-                            .child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .h_full()
-                                    .w(px(fill_w))
-                                    .bg(theme::TEXT_PRIMARY)
-                                    .rounded(px(999.0)),
-                            ),
-                    ),
+                    .w(px(80.0))
+                    .child(Slider::new(&self.volume_slider).h(px(8.0))),
             )
-    }
-
-    /// Set volume with snap-to-100% — if the raw ratio is >= 0.95 we treat it as 1.0.
-    fn set_volume_snapped(&mut self, ratio: f64, cx: &mut Context<Self>) {
-        let snapped = if ratio >= 0.95 { 1.0 } else { ratio };
-        self.set_volume(snapped, cx);
     }
 
     /// Set volume and update video player
@@ -1935,23 +2136,17 @@ impl SecousseApp {
                         // Back button to clear search
                         {
                             let app_state = self.app_state.clone();
-                            div()
-                                .id("clear-search-btn")
-                                .px(px(12.0))
-                                .py(px(6.0))
-                                .bg(theme::BG_TERTIARY)
-                                .hover(|style| style.bg(theme::BG_ELEVATED))
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .text_color(theme::TEXT_SECONDARY)
-                                .text_size(px(12.0))
+                            Button::new("clear-search-btn")
+                                .text()
+                                .small()
+                                .rounded(px(2.0))
+                                .label("Clear Search")
                                 .on_click(move |_event, _window, cx| {
                                     app_state.update(cx, |state, cx| {
                                         state.clear_search();
                                         cx.notify();
                                     });
                                 })
-                                .child("Clear Search")
                         },
                     ),
             )
@@ -1984,7 +2179,7 @@ impl SecousseApp {
                             .flex_wrap()
                             .gap(px(16.0));
                         for channel in results.iter() {
-                            grid = grid.child(self.render_stream_card(channel, cx));
+                            grid = grid.child(self.render_stream_card(channel, None, None, None, cx));
                         }
                         grid
                     });
@@ -1993,11 +2188,31 @@ impl SecousseApp {
     }
 
     /// Render the Following tab
-    fn render_following_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_following_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_logged_in = self.auth_state.read(cx).is_logged_in;
         let app = self.app_state.read(cx);
         let followed = app.followed_channels.clone();
         let is_loading = app.is_loading_followed;
+        let sidebar_width = if app.is_sidebar_open {
+            theme::SIDEBAR_WIDTH
+        } else {
+            theme::SIDEBAR_COLLAPSED_WIDTH
+        };
+        let available_width = (f32::from(window.bounds().size.width)
+            - f32::from(sidebar_width)
+            - 48.0)
+            .max(0.0);
+        let card_gap = 16.0;
+        let min_card_width = 240.0;
+        let info_height = 110.0;
+        let columns = ((available_width + card_gap) / (min_card_width + card_gap))
+            .floor()
+            .max(1.0) as usize;
+        let card_width = ((available_width - (columns.saturating_sub(1) as f32 * card_gap))
+            / columns as f32)
+            .max(min_card_width);
+        let thumbnail_height = (card_width * 9.0 / 16.0).round();
+        let card_height = thumbnail_height + info_height;
 
         div()
             .id("following-tab")
@@ -2059,7 +2274,15 @@ impl SecousseApp {
                             .flex_wrap()
                             .gap(px(16.0));
                         for channel in followed.iter().filter(|c| c.is_live) {
-                            grid = grid.child(self.render_stream_card(channel, cx));
+                            grid = grid.child(
+                                self.render_stream_card(
+                                    channel,
+                                    Some(card_width),
+                                    Some(card_height),
+                                    Some(thumbnail_height),
+                                    cx,
+                                ),
+                            );
                         }
                         grid
                     });
@@ -2071,6 +2294,9 @@ impl SecousseApp {
     fn render_stream_card(
         &self,
         channel: &FollowedChannel,
+        card_width: Option<f32>,
+        card_height: Option<f32>,
+        thumbnail_height: Option<f32>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let login = channel.login.clone();
@@ -2087,32 +2313,48 @@ impl SecousseApp {
             50,
         );
 
-        div()
+        let mut card = div()
             .id(SharedString::from(format!("stream-card-{}", channel.login)))
-            .flex_basis(px(280.0))
-            .flex_grow()
-            .flex_shrink()
-            .min_w(px(250.0))
-            .max_w(px(400.0))
             .bg(theme::BG_SECONDARY)
             .rounded(px(8.0))
             .overflow_hidden()
             .cursor_pointer()
             .hover(|style| style.bg(theme::BG_TERTIARY))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.enter_channel(login.clone(), cx);
-            }))
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                this.enter_channel(login.clone(), window, cx);
+            }));
+
+        if let Some(width) = card_width {
+            card = card.w(px(width)).flex_shrink_0();
+        } else {
+            card = card
+                .flex_basis(px(280.0))
+                .flex_grow()
+                .flex_shrink()
+                .min_w(px(250.0))
+                .max_w(px(400.0));
+        }
+
+        let computed_thumbnail_height = thumbnail_height.unwrap_or(170.0);
+        let is_live = channel.is_live;
+        if let Some(height) = card_height {
+            card = card.h(px(height));
+        } else if card_width.is_some() {
+            card = card.h(px(computed_thumbnail_height + 110.0));
+        }
+
+        card
             .child(
                 // Thumbnail
                 if let Some(url) = thumbnail_url {
                     img(url)
                         .w_full()
-                        .h(px(170.0))
+                        .h(px(computed_thumbnail_height))
                         .object_fit(ObjectFit::Cover)
-                        .with_loading(|| {
+                        .with_loading(move || {
                             div()
                                 .w_full()
-                                .h(px(170.0))
+                                .h(px(computed_thumbnail_height))
                                 .bg(theme::VIDEO_BG)
                                 .flex()
                                 .items_center()
@@ -2125,10 +2367,10 @@ impl SecousseApp {
                                 )
                                 .into_any_element()
                         })
-                        .with_fallback(|| {
+                        .with_fallback(move || {
                             div()
                                 .w_full()
-                                .h(px(170.0))
+                                .h(px(computed_thumbnail_height))
                                 .bg(theme::VIDEO_BG)
                                 .flex()
                                 .items_center()
@@ -2137,7 +2379,7 @@ impl SecousseApp {
                                     div()
                                         .text_color(theme::TEXT_SECONDARY)
                                         .text_size(px(12.0))
-                                        .child("LIVE"),
+                                        .child(if is_live { "LIVE" } else { "OFFLINE" }),
                                 )
                                 .into_any_element()
                         })
@@ -2145,7 +2387,7 @@ impl SecousseApp {
                 } else {
                     div()
                         .w_full()
-                        .h(px(170.0))
+                        .h(px(computed_thumbnail_height))
                         .bg(theme::VIDEO_BG)
                         .flex()
                         .items_center()
@@ -2154,7 +2396,7 @@ impl SecousseApp {
                             div()
                                 .text_color(theme::TEXT_SECONDARY)
                                 .text_size(px(12.0))
-                                .child("LIVE"),
+                                .child(if is_live { "LIVE" } else { "OFFLINE" }),
                         )
                         .into_any_element()
                 },
@@ -2163,6 +2405,7 @@ impl SecousseApp {
                 // Stream info
                 div()
                     .p(px(12.0))
+                    .h(px(110.0))
                     .flex()
                     .gap(px(10.0))
                     .child(
@@ -2174,7 +2417,13 @@ impl SecousseApp {
                                 .overflow_hidden()
                                 .bg(theme::BG_TERTIARY)
                                 .flex_shrink_0()
-                                .child(img(url).w_full().h_full().object_fit(ObjectFit::Cover))
+                                .child(
+                                    img(url)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(ObjectFit::Cover)
+                                        .rounded_full(),
+                                )
                                 .into_any_element()
                         } else {
                             div()
@@ -2234,7 +2483,7 @@ impl SecousseApp {
                                         40,
                                     )),
                             )
-                            .child(
+                            .child(if is_live {
                                 div()
                                     .flex()
                                     .items_center()
@@ -2247,8 +2496,15 @@ impl SecousseApp {
                                             .child(format_viewer_count(
                                                 channel.viewer_count.unwrap_or(0),
                                             )),
-                                    ),
-                            ),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .text_color(theme::TEXT_SECONDARY)
+                                    .text_size(px(12.0))
+                                    .child("Offline")
+                                    .into_any_element()
+                            }),
                     ),
             )
     }
@@ -2262,11 +2518,33 @@ impl SecousseApp {
     }
 
     /// Render the Browse tab
-    fn render_browse_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_browse_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app_state = self.app_state.read(cx);
         let is_loading = app_state.is_loading_browse;
         let top_streams = app_state.top_streams.clone();
         let browse_loaded = app_state.browse_loaded;
+        let sidebar_width = if app_state.is_sidebar_open {
+            theme::SIDEBAR_WIDTH
+        } else {
+            theme::SIDEBAR_COLLAPSED_WIDTH
+        };
+        let available_width = (f32::from(window.bounds().size.width)
+            - f32::from(sidebar_width)
+            - 48.0)
+            .max(0.0);
+        let card_gap = 16.0;
+        let min_card_width = 240.0;
+        let info_height = 110.0;
+        let row_gap = 20.0;
+        let columns = ((available_width + card_gap) / (min_card_width + card_gap))
+            .floor()
+            .max(1.0) as usize;
+        let card_width = ((available_width - (columns.saturating_sub(1) as f32 * card_gap))
+            / columns as f32)
+            .max(min_card_width);
+        let thumbnail_height = (card_width * 9.0 / 16.0).round();
+        let card_height = thumbnail_height + info_height;
+        let rows = (top_streams.len() + columns - 1) / columns;
 
         div()
             .id("browse-tab")
@@ -2314,31 +2592,57 @@ impl SecousseApp {
                     .child("No streams found.")
                     .into_any_element()
             } else {
-                // Scrollable grid of top streams
-                let container = div()
-                    .id("browse-streams-grid")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .px(px(24.0))
-                    .pb(px(24.0))
-                    .child({
-                        let mut grid = div()
-                            .w_full()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(16.0));
-                        for stream in top_streams.iter() {
-                            grid = grid.child(self.render_stream_card(stream, cx));
-                        }
-                        grid
-                    });
-                container.into_any_element()
+                // Virtualized grid of top streams
+                let item_sizes = std::rc::Rc::new(
+                    (0..rows)
+                        .map(|_| size(px(available_width.max(0.0)), px(card_height + row_gap)))
+                        .collect::<Vec<_>>(),
+                );
+                let streams = std::rc::Rc::new(top_streams);
+
+                v_virtual_list(
+                    cx.entity().clone(),
+                    "browse-streams-list",
+                    item_sizes,
+                    move |view, visible_range, _, cx| {
+                        visible_range
+                            .map(|row_ix| {
+                                let start = row_ix * columns;
+                                let end = (start + columns).min(streams.len());
+                                let mut row = div()
+                                    .w_full()
+                                    .h(px(card_height + row_gap))
+                                    .flex()
+                                    .items_start()
+                                    .gap(px(card_gap))
+                                    .pb(px(row_gap));
+                                for stream in streams.iter().take(end).skip(start) {
+                                    row = row.child(
+                                        view.render_stream_card(
+                                            stream,
+                                            Some(card_width),
+                                            Some(card_height),
+                                            Some(thumbnail_height),
+                                            cx,
+                                        ),
+                                    );
+                                }
+                                row
+                            })
+                            .collect()
+                    },
+                )
+                .track_scroll(&self.browse_scroll_handle)
+                .flex_1()
+                .px(px(24.0))
+                .pb(px(24.0))
+                .into_any_element()
             })
     }
 }
 
 impl Render for SecousseApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app_state = self.app_state.read(cx);
         let is_fullscreen = app_state.is_fullscreen;
         let sidebar_width = if app_state.is_sidebar_open {
@@ -2407,7 +2711,7 @@ impl Render for SecousseApp {
                             .flex_1()
                             .h_full()
                             .overflow_hidden()
-                            .child(self.render_main_content(cx)),
+                            .child(self.render_main_content(window, cx)),
                     ),
             )
     }
@@ -2424,7 +2728,7 @@ fn format_viewer_count(count: u32) -> String {
     }
 }
 
-/// Truncate a string to at most `max_chars` characters, appending "…" if truncated.
+/// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
 /// Always respects char boundaries (safe for emoji/multi-byte).
 fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
     let char_count = text.chars().count();
@@ -2432,6 +2736,6 @@ fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
         text.to_string()
     } else {
         let truncated: String = text.chars().take(max_chars).collect();
-        format!("{}…", truncated)
+        format!("{}...", truncated)
     }
 }

@@ -9,6 +9,7 @@ edition = "2024"
 # GPUI Framework - published crate from crates.io
 gpui = "0.2.2"
 gpui_http_client = "0.2.2"
+gpui-component = "0.5.1"
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }

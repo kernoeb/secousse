@@ -168,7 +168,7 @@ fn parse_hls_master_playlist(content: &str) -> Vec<StreamQuality> {
                     if name.is_empty() {
                         name = resolution
                             .clone()
-                            .unwrap_or_else(|| format!("{}bps", bandwidth));
+                            .unwrap_or_else(|| "source".to_string());
                     }
 
                     qualities.push(StreamQuality {

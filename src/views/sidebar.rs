@@ -2,10 +2,10 @@
 //!
 //! Contains the followed channels list and collapse toggle.
 
-use gpui::prelude::StyledImage;
+use gpui::prelude::{FluentBuilder, StyledImage};
 use gpui::*;
-
-use crate::components::icon::{Icon, IconName};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::{IconName, Sizable};
 use crate::state::{AppState, FollowedChannel};
 use crate::theme;
 
@@ -66,6 +66,7 @@ impl Render for SidebarView {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .when(!is_open, |el: Div| el.justify_center().px(px(0.0)))
                     .child(if is_open {
                         div()
                             .text_color(theme::TEXT_PRIMARY)
@@ -76,7 +77,7 @@ impl Render for SidebarView {
                     } else {
                         div().into_any_element()
                     })
-                    .child(self.render_collapse_button(is_open)),
+                    .child(self.render_collapse_button(is_open, cx)),
             )
             // Channel list
             .child(div().id("channel-list").flex_1().overflow_y_scroll().child(
@@ -99,33 +100,30 @@ impl Render for SidebarView {
 
 impl SidebarView {
     /// Render the collapse/expand button
-    fn render_collapse_button(&self, is_open: bool) -> impl IntoElement {
+    fn render_collapse_button(&self, is_open: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let app_state = self.app_state.clone();
+        let hover_variant = ButtonCustomVariant::new(cx)
+            .color(theme::TRANSPARENT.into())
+            .foreground(theme::TEXT_SECONDARY.into())
+            .border(theme::TRANSPARENT.into())
+            .hover(theme::BG_TERTIARY.into())
+            .active(theme::BG_ELEVATED.into());
 
-        div()
-            .id("sidebar-toggle")
-            .size(px(30.0))
-            .rounded(px(4.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|style| style.bg(theme::BG_TERTIARY))
+        Button::new("sidebar-toggle")
+            .custom(hover_variant)
+            .xsmall()
+            .rounded(px(2.0))
+            .icon(if is_open {
+                IconName::PanelLeft
+            } else {
+                IconName::PanelRight
+            })
             .on_click(move |_event, _window, cx| {
                 app_state.update(cx, |state, cx| {
                     state.toggle_sidebar();
                     cx.notify();
                 });
             })
-            .child(
-                Icon::new(if is_open {
-                    IconName::PanelLeft
-                } else {
-                    IconName::PanelRight
-                })
-                .color(theme::TEXT_SECONDARY)
-                .size(px(18.0)),
-            )
     }
 
     /// Render empty state when no followed channels
@@ -181,7 +179,13 @@ impl SidebarView {
                 .overflow_hidden()
                 .bg(theme::BG_TERTIARY)
                 .flex_shrink_0()
-                .child(img(url).w_full().h_full().object_fit(ObjectFit::Cover))
+                .child(
+                    img(url)
+                        .w_full()
+                        .h_full()
+                        .object_fit(ObjectFit::Cover)
+                        .rounded_full(),
+                )
         } else {
             div()
                 .size(px(30.0))

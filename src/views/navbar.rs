@@ -2,12 +2,12 @@
 //!
 //! Contains the logo, navigation tabs, search, and user profile.
 
-use gpui::*;
-
-use crate::components::icon::{Icon, IconName};
-use crate::components::text_input::{TextInput, TextInputEvent, TextInputState};
 use crate::state::{ActiveTab, AppState, AuthState};
 use crate::theme;
+use gpui::*;
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{Icon, IconName, Sizable};
 
 /// Events emitted by the navbar
 #[derive(Clone)]
@@ -25,7 +25,7 @@ impl EventEmitter<NavbarEvent> for NavbarView {}
 pub struct NavbarView {
     app_state: Entity<AppState>,
     auth_state: Entity<AuthState>,
-    search_input: Entity<TextInputState>,
+    search_input: Entity<InputState>,
 }
 
 impl NavbarView {
@@ -33,33 +33,36 @@ impl NavbarView {
     pub fn new(
         app_state: Entity<AppState>,
         auth_state: Entity<AuthState>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input = cx.new(|cx| TextInputState::new(cx));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search...")
+                .clean_on_escape()
+        });
 
-        // Subscribe to text input events
-        cx.subscribe(&search_input, |this, _input, event: &TextInputEvent, cx| {
-            match event {
-                TextInputEvent::Submit(text) => {
+        // Subscribe to input events
+        cx.subscribe_in(
+            &search_input,
+            window,
+            |_this, state, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    let text = state.read(cx).value().to_string();
                     if !text.is_empty() {
                         log::info!("Submitting search: {}", text);
-                        cx.emit(NavbarEvent::SearchSubmitted(text.clone()));
+                        cx.emit(NavbarEvent::SearchSubmitted(text));
                     }
                 }
-                TextInputEvent::Escape => {
-                    // Clear search on escape
-                    this.search_input.update(cx, |state, cx| {
-                        state.set_text("", cx);
-                    });
-                    cx.emit(NavbarEvent::SearchCleared);
-                }
-                TextInputEvent::Change(text) => {
+                InputEvent::Change => {
+                    let text = state.read(cx).value();
                     if text.is_empty() {
                         cx.emit(NavbarEvent::SearchCleared);
                     }
                 }
-            }
-        })
+                InputEvent::Focus | InputEvent::Blur => {}
+            },
+        )
         .detach();
 
         Self {
@@ -67,15 +70,6 @@ impl NavbarView {
             auth_state,
             search_input,
         }
-    }
-
-    /// Clear search
-    fn clear_search(&mut self, cx: &mut Context<Self>) {
-        self.search_input.update(cx, |state, cx| {
-            state.set_text("", cx);
-        });
-        cx.emit(NavbarEvent::SearchCleared);
-        cx.notify();
     }
 }
 
@@ -89,6 +83,8 @@ impl Render for NavbarView {
             .display_name()
             .map(|s| s.to_string());
         let active_tab = self.app_state.read(cx).active_tab;
+        let is_following_selected = matches!(active_tab, ActiveTab::Following);
+        let is_browse_selected = matches!(active_tab, ActiveTab::Browse);
 
         div()
             .id("navbar")
@@ -128,13 +124,7 @@ impl Render for NavbarView {
                     ),
             )
             // Navigation tabs
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.0))
-                    .child(self.render_tab("Following", ActiveTab::Following, active_tab, cx))
-                    .child(self.render_tab("Browse", ActiveTab::Browse, active_tab, cx)),
-            )
+            .child(self.render_tab_buttons(is_following_selected, is_browse_selected, cx))
             // Spacer
             .child(div().flex_1())
             // Search box
@@ -149,116 +139,104 @@ impl Render for NavbarView {
 }
 
 impl NavbarView {
-    /// Render a navigation tab button
-    fn render_tab(
+    fn render_tab_buttons(
         &self,
-        label: &'static str,
-        tab: ActiveTab,
-        current_tab: ActiveTab,
+        is_following_selected: bool,
+        is_browse_selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_active = tab == current_tab;
-        let _app_state = self.app_state.clone();
+        let tab_variant = ButtonCustomVariant::new(cx)
+            .color(theme::TRANSPARENT.into())
+            .foreground(theme::TEXT_SECONDARY.into())
+            .border(theme::TRANSPARENT.into())
+            .hover(theme::BG_TERTIARY.into())
+            .active(theme::BG_ELEVATED.into());
+        let selected_variant = ButtonCustomVariant::new(cx)
+            .color(theme::BG_TERTIARY.into())
+            .foreground(theme::TEXT_PRIMARY.into())
+            .border(theme::TRANSPARENT.into())
+            .hover(theme::BG_ELEVATED.into())
+            .active(theme::BG_ELEVATED.into());
+
+        let following_variant = if is_following_selected {
+            selected_variant
+        } else {
+            tab_variant
+        };
+        let browse_variant = if is_browse_selected {
+            selected_variant
+        } else {
+            tab_variant
+        };
 
         div()
-            .id(SharedString::from(format!("tab-{:?}", tab)))
-            .px(px(8.0))
-            .py(px(3.0))
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .bg(if is_active {
-                theme::BG_TERTIARY
-            } else {
-                theme::TRANSPARENT
-            })
-            .hover(|style| style.bg(theme::BG_TERTIARY))
-            .text_color(if is_active {
-                theme::TEXT_PRIMARY
-            } else {
-                theme::TEXT_SECONDARY
-            })
-            .text_size(px(12.0))
-            .font_weight(if is_active {
-                FontWeight::SEMIBOLD
-            } else {
-                FontWeight::NORMAL
-            })
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.app_state.update(cx, |state, cx| {
-                    state.set_tab(tab);
-                    state.set_channel(None); // Clear channel when switching tabs
-                    cx.notify();
-                });
-                // Emit tab changed event so the app can fetch data if needed
-                cx.emit(NavbarEvent::TabChanged(tab));
-            }))
-            .child(label)
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                Button::new("tab-following")
+                    .custom(following_variant)
+                    .xsmall()
+                    .rounded(px(2.0))
+                    .label("Following")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        let tab = ActiveTab::Following;
+                        this.app_state.update(cx, |state, cx| {
+                            state.set_tab(tab);
+                            state.set_channel(None);
+                            cx.notify();
+                        });
+                        cx.emit(NavbarEvent::TabChanged(tab));
+                    })),
+            )
+            .child(
+                Button::new("tab-browse")
+                    .custom(browse_variant)
+                    .xsmall()
+                    .rounded(px(2.0))
+                    .label("Browse")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        let tab = ActiveTab::Browse;
+                        this.app_state.update(cx, |state, cx| {
+                            state.set_tab(tab);
+                            state.set_channel(None);
+                            cx.notify();
+                        });
+                        cx.emit(NavbarEvent::TabChanged(tab));
+                    })),
+            )
     }
 
     /// Render the search input
     fn render_search_input(
         &self,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let has_text = !self.search_input.read(cx).text().is_empty();
-
-        div().w(px(240.0)).flex().items_center().gap(px(0.0)).child(
-            TextInput::new(&self.search_input)
-                .placeholder("Search...")
+        div().w(px(240.0)).flex().items_center().child(
+            Input::new(&self.search_input)
+                .small()
+                .cleanable(true)
                 .prefix(
                     Icon::new(IconName::Search)
-                        .size_3p5()
-                        .color(theme::TEXT_DISABLED),
-                )
-                .suffix(if has_text {
-                    div()
-                        .id("search-clear")
-                        .size(px(16.0))
-                        .rounded_full()
-                        .bg(theme::BG_TERTIARY)
-                        .hover(|style| style.bg(theme::BG_ELEVATED))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.clear_search(cx);
-                        }))
-                        .child(Icon::new(IconName::X).size_3().color(theme::TEXT_SECONDARY))
-                        .into_any_element()
-                } else {
-                    div().into_any_element()
-                }),
+                        .small()
+                        .text_color(theme::TEXT_DISABLED),
+                ),
         )
     }
 
     /// Render login button for unauthenticated users
     fn render_login_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("login-button")
-            .px(px(12.0))
-            .py(px(4.0))
-            .bg(theme::TWITCH_PURPLE)
-            .hover(|style| style.bg(theme::TWITCH_PURPLE_HOVER))
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .text_color(theme::TEXT_PRIMARY)
-            .text_size(px(12.0))
-            .font_weight(FontWeight::SEMIBOLD)
+        Button::new("login-button")
+            .primary()
+            .small()
+            .rounded(px(2.0))
+            .icon(Icon::empty().path("icons/log-in.svg").small())
+            .label("Log In")
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 log::info!("Login button clicked, emitting LoginRequested event");
                 cx.emit(NavbarEvent::LoginRequested);
             }))
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                Icon::new(IconName::LogIn)
-                    .size_4()
-                    .color(theme::TEXT_PRIMARY),
-            )
-            .child("Log In")
     }
 
     /// Render user menu for authenticated users
@@ -276,55 +254,46 @@ impl NavbarView {
             .items_center()
             .gap(px(6.0))
             .child(
-                // User profile button
-                div()
-                    .id("user-button")
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .px(px(6.0))
-                    .py(px(2.0))
-                    .rounded(px(4.0))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme::BG_TERTIARY))
+                Button::new("user-button")
+                    .ghost()
+                    .compact()
+                    .rounded(px(2.0))
                     .child(
-                        // Avatar
                         div()
-                            .size(px(22.0))
-                            .bg(theme::TWITCH_PURPLE)
-                            .rounded_full()
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .text_color(theme::TEXT_PRIMARY)
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::BOLD)
-                            .child(first_char),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::TEXT_PRIMARY)
-                            .text_size(px(12.0))
-                            .child(name),
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .size(px(22.0))
+                                    .bg(theme::TWITCH_PURPLE)
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(first_char),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_size(px(12.0))
+                                    .child(name),
+                            ),
                     ),
             )
             .child(
-                // Logout button
-                div()
-                    .id("logout-button")
-                    .px(px(10.0))
-                    .py(px(3.0))
-                    .bg(theme::BG_TERTIARY)
-                    .hover(|style| style.bg(theme::BG_ELEVATED))
-                    .rounded(px(4.0))
-                    .cursor_pointer()
-                    .text_color(theme::TEXT_SECONDARY)
-                    .text_size(px(11.0))
+                Button::new("logout-button")
+                    .text()
+                    .xsmall()
+                    .rounded(px(2.0))
+                    .label("Logout")
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         log::info!("Logout button clicked, emitting LogoutRequested event");
                         cx.emit(NavbarEvent::LogoutRequested);
-                    }))
-                    .child("Logout"),
+                    })),
             )
     }
 }

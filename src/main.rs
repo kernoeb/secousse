@@ -6,7 +6,6 @@ mod actions;
 mod api;
 mod app;
 mod assets;
-mod components;
 mod http;
 mod state;
 mod theme;
@@ -15,6 +14,7 @@ mod views;
 
 use app::SecousseApp;
 use gpui::*;
+use gpui_component::Root;
 use log::info;
 use state::Settings;
 use std::sync::OnceLock;
@@ -92,11 +92,11 @@ fn main() {
         #[cfg(target_os = "macos")]
         set_dock_icon();
 
+        // Initialize GPUI Component
+        gpui_component::init(cx);
+
         // Register keybindings
         actions::register_keybindings(cx);
-
-        // Register text input keybindings
-        components::text_input::init(cx);
 
         // Handle Quit action (Cmd+Q)
         cx.on_action::<actions::Quit>(|_action, cx| {
@@ -138,7 +138,8 @@ fn main() {
                 });
 
                 // Create the app with settings
-                cx.new(|cx| SecousseApp::new(settings, window, cx))
+                let app = cx.new(|cx| SecousseApp::new(settings, window, cx));
+                cx.new(|cx| Root::new(app, window, cx))
             },
         )
         .expect("Failed to open window");

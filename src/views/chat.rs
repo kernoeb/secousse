@@ -5,14 +5,15 @@
 
 use async_compat::Compat;
 use gpui::*;
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{Icon, IconName, Sizable};
 use log::{error, info};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use crate::api::chat::{ChatEvent, ChatMessage};
 use crate::api::emotes;
-use crate::components::icon::{Icon, IconName};
-use crate::components::text_input::{TextInput, TextInputEvent, TextInputState};
 use crate::theme;
 
 const MAX_MESSAGES: usize = 150;
@@ -39,7 +40,7 @@ pub struct ChatView {
     /// Last known message count (to detect new additions / removals)
     last_message_count: usize,
     /// Text input state for the chat input
-    chat_input: Entity<TextInputState>,
+    chat_input: Entity<InputState>,
     /// Third-party emote map: emote name → image URL (7TV, BTTV, FFZ)
     third_party_emotes: Arc<Mutex<HashMap<String, String>>>,
 }
@@ -61,27 +62,25 @@ impl ChatView {
         channel_id: Option<String>,
         access_token: Option<String>,
         username: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let messages = Arc::new(Mutex::new(VecDeque::new()));
-        let chat_input = cx.new(|cx| TextInputState::new(cx));
+        let chat_input = cx.new(|cx| InputState::new(window, cx));
 
-        // Subscribe to text input events for sending messages
-        cx.subscribe(&chat_input, |this, _input, event: &TextInputEvent, cx| {
+        // Subscribe to input events for sending messages
+        cx.subscribe_in(&chat_input, window, |this, state, event: &InputEvent, window, cx| {
             match event {
-                TextInputEvent::Submit(text) => {
+                InputEvent::PressEnter { .. } => {
+                    let text = state.read(cx).value().to_string();
                     if !text.is_empty() {
                         this.send_message_text(text.clone(), cx);
-                        // Clear input after send
-                        this.chat_input.update(cx, |state, cx| {
-                            state.set_text("", cx);
+                        state.update(cx, |state, cx| {
+                            state.set_value("", window, cx);
                         });
                     }
                 }
-                TextInputEvent::Escape => {
-                    // Just blur, input handles that
-                }
-                TextInputEvent::Change(_) => {}
+                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => {}
             }
         })
         .detach();
@@ -277,6 +276,38 @@ impl ChatView {
             return;
         }
 
+        let user = self
+            .username
+            .clone()
+            .unwrap_or_else(|| "You".to_string());
+        let id = format!(
+            "local-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let local_message = ChatMessage {
+            id,
+            user,
+            message: text.clone(),
+            color: None,
+            badges: Vec::new(),
+            channel: self.channel.clone(),
+            emotes: Vec::new(),
+        };
+
+        {
+            let mut msgs = self.messages.lock().unwrap();
+            msgs.push_back(local_message);
+            while msgs.len() > MAX_MESSAGES {
+                msgs.pop_front();
+            }
+            self.last_message_count = msgs.len();
+        }
+        self.list_state.reset(self.last_message_count);
+        cx.notify();
+
         if let Some(sender) = &self.sender {
             let sender = sender.clone();
 
@@ -307,9 +338,9 @@ impl ChatView {
 }
 
 impl Render for ChatView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_connected = self.is_connected;
-        let has_input = !self.chat_input.read(cx).text().is_empty();
+        let has_input = !self.chat_input.read(cx).value().is_empty();
         let can_send = self.access_token.is_some() && self.sender.is_some();
 
         // Sync list state with current message count (cheap no-op when unchanged)
@@ -358,20 +389,23 @@ impl Render for ChatView {
                             .items_center()
                             .gap(px(8.0))
                             .child(
-                                div()
-                                    .id("chat-close-btn")
-                                    .p(px(4.0))
-                                    .rounded(px(4.0))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme::BG_ELEVATED))
-                                    .on_click(cx.listener(|_this, _event, _window, cx| {
-                                        cx.emit(ChatViewEvent::CloseRequested);
-                                    }))
-                                    .child(
-                                        Icon::new(IconName::PanelRight)
-                                            .size_4()
-                                            .color(theme::TEXT_SECONDARY),
-                                    ),
+                                {
+                                    let close_variant = ButtonCustomVariant::new(cx)
+                                        .color(theme::TRANSPARENT.into())
+                                        .foreground(theme::TEXT_SECONDARY.into())
+                                        .border(theme::TRANSPARENT.into())
+                                        .hover(theme::BG_ELEVATED.into())
+                                        .active(theme::BG_ELEVATED.into());
+
+                                    Button::new("chat-close-btn")
+                                        .custom(close_variant)
+                                        .xsmall()
+                                        .rounded(px(2.0))
+                                        .icon(IconName::PanelRight)
+                                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                                            cx.emit(ChatViewEvent::CloseRequested);
+                                        }))
+                                },
                             )
                             .child(
                                 div()
@@ -439,42 +473,39 @@ impl Render for ChatView {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(
-                        TextInput::new(&self.chat_input)
-                            .placeholder(if can_send {
-                                "Send a message"
-                            } else {
-                                "Log in to chat"
-                            })
+                    .child({
+                        let placeholder = if can_send {
+                            "Send a message"
+                        } else {
+                            "Log in to chat"
+                        };
+
+                        self.chat_input.update(cx, |state, cx| {
+                            state.set_placeholder(placeholder, window, cx);
+                        });
+
+                        Input::new(&self.chat_input)
+                            .large()
+                            .disabled(!can_send)
                             .suffix(if has_input && can_send {
-                                div()
-                                    .id("send-btn")
-                                    .px(px(12.0))
-                                    .py(px(4.0))
-                                    .bg(theme::TWITCH_PURPLE)
-                                    .hover(|style| style.bg(theme::TWITCH_PURPLE_HOVER))
-                                    .rounded(px(4.0))
-                                    .cursor_pointer()
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .text_size(px(12.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        let text = this.chat_input.read(cx).text().to_string();
+                                Button::new("send-btn")
+                                    .primary()
+                                    .xsmall()
+                                    .rounded(px(2.0))
+                                    .icon(Icon::empty().path("icons/send.svg").small())
+                                    .label("Chat")
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        let text = this.chat_input.read(cx).value().to_string();
                                         this.send_message_text(text, cx);
                                         this.chat_input.update(cx, |state, cx| {
-                                            state.set_text("", cx);
+                                            state.set_value("", window, cx);
                                         });
                                     }))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .child(Icon::new(IconName::Send).size_3p5().color(theme::TEXT_PRIMARY))
-                                    .child("Chat")
                                     .into_any_element()
                             } else {
                                 div().into_any_element()
-                            }),
-                    ),
+                            })
+                    }),
             )
     }
 }
@@ -602,9 +633,9 @@ fn build_fragments_with_twitch_emotes(
     let mut cursor = 0usize;
 
     for (emote_id, start, end) in twitch_emotes {
-        let start = *start;
-        // Twitch end positions are inclusive
-        let end = (*end + 1).min(msg_bytes.len());
+        let start = char_index_to_byte_index(message, *start).min(msg_bytes.len());
+        // Twitch end positions are inclusive (char index)
+        let end = char_index_to_byte_index(message, end.saturating_add(1)).min(msg_bytes.len());
 
         if start > cursor {
             // Text between previous emote and this one — check for third-party emotes
@@ -628,6 +659,22 @@ fn build_fragments_with_twitch_emotes(
     }
 
     fragments
+}
+
+fn char_index_to_byte_index(text: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+
+    let mut count = 0usize;
+    for (byte_index, _) in text.char_indices() {
+        if count == char_index {
+            return byte_index;
+        }
+        count += 1;
+    }
+
+    text.len()
 }
 
 /// Word-based matching for third-party emotes (7TV, BTTV, FFZ).
