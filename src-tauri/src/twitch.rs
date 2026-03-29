@@ -317,8 +317,7 @@ impl TwitchClient {
     }
 
     pub fn get_usher_url(&self, login: &str, token: &AccessToken) -> String {
-        let mut rng = rand::thread_rng();
-        let p: u32 = rand::Rng::gen_range(&mut rng, 0..9999999);
+        let p: u32 = rand::random_range(0..9999999);
         
         format!(
             "https://usher.ttvnw.net/api/v2/channel/hls/{}.m3u8?allow_source=true&allow_audio_only=true&fast_bread=true&p={}&sig={}&token={}",
