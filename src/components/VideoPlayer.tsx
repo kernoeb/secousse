@@ -59,6 +59,7 @@ export function VideoPlayer({
           liveMaxLatencyDuration: 8,
           liveSyncOnStallIncrease: 1,
           highBufferWatchdogPeriod: 1,
+          abrEwmaDefaultEstimate: 5_000_000,
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
