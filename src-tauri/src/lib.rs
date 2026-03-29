@@ -2,13 +2,14 @@ pub mod twitch;
 pub mod chat;
 pub mod emotes;
 
-use log::{info, error};
+use log::{info, debug, error};
 use tauri::{State, Window, Manager, Emitter};
 use tauri::window::Color;
 use twitch::TwitchClient;
 use tokio::sync::Mutex;
 use emotes::Emote;
 use tauri_plugin_store::StoreExt;
+use std::sync::Arc;
 
 pub struct WatchState {
     pub channel_login: String,
@@ -19,6 +20,7 @@ pub struct WatchState {
 
 pub struct AppState {
     pub twitch_client: Mutex<TwitchClient>,
+    pub http_client: Arc<reqwest::Client>,
     pub chat_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub chat_sender: Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
     pub watch_state: Mutex<Option<WatchState>>,
@@ -32,43 +34,41 @@ async fn show_main_window(window: Window) {
 
 #[tauri::command]
 async fn get_stream_url(state: State<'_, AppState>, login: String) -> Result<String, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     let token = client.get_playback_access_token(&login).await.map_err(|e| e.to_string())?;
     Ok(client.get_usher_url(&login, &token))
 }
 
 #[tauri::command]
 async fn get_user_info(state: State<'_, AppState>, login: String) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_user_info(&login).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_users_info(state: State<'_, AppState>, logins: Vec<String>) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_users_info(logins).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_self_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     if !client.is_authenticated() {
         return Err("Not logged in".to_string());
     }
     let result = client.get_self_info().await.map_err(|e| e.to_string())?;
-    
-    // Cache the username for chat connections
+
     if let Some(username) = result.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()) {
-        let mut cache = state.cached_username.lock().await;
-        *cache = Some(username.to_string());
+        *state.cached_username.lock().await = Some(username.to_string());
     }
-    
+
     Ok(result)
 }
 
 #[tauri::command]
 async fn get_followed_channels(state: State<'_, AppState>, user_id: String) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     if !client.is_authenticated() {
         return Err("Not logged in".to_string());
     }
@@ -77,13 +77,13 @@ async fn get_followed_channels(state: State<'_, AppState>, user_id: String) -> R
 
 #[tauri::command]
 async fn get_global_badges(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_global_badges().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_channel_badges(state: State<'_, AppState>, channel_id: String) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_channel_badges(&channel_id).await.map_err(|e| e.to_string())
 }
 
@@ -108,13 +108,13 @@ async fn get_global_emotes() -> Result<Vec<Emote>, String> {
 
 #[tauri::command]
 async fn get_twitch_global_emotes(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_twitch_global_emotes().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_twitch_channel_emotes(state: State<'_, AppState>, channel_id: String) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_twitch_channel_emotes(&channel_id).await.map_err(|e| e.to_string())
 }
 
@@ -142,22 +142,18 @@ async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: St
     
     // If authenticated, get the username (use cache if available)
     let username: Option<String> = if access_token.is_some() {
-        // Check cache first
         let cached = state.cached_username.lock().await.clone();
         if let Some(user) = cached {
             info!("[connect_to_chat] Using cached username: {}", user);
             Some(user)
         } else {
-            // Fetch from API and cache it
-            let client = state.twitch_client.lock().await;
+            let client = state.twitch_client.lock().await.clone();
             match client.get_self_info().await {
                 Ok(data) => {
                     let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
                     info!("[connect_to_chat] Got username from API: {:?}", username);
-                    // Cache the username for future use
                     if let Some(ref user) = username {
-                        let mut cache = state.cached_username.lock().await;
-                        *cache = Some(user.clone());
+                        *state.cached_username.lock().await = Some(user.clone());
                     }
                     username
                 },
@@ -189,10 +185,10 @@ async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: St
 
 #[tauri::command]
 async fn send_chat_message(state: State<'_, AppState>, message: String) -> Result<(), String> {
-    info!("[send_chat_message] Attempting to send: {}", message);
+    debug!("[send_chat_message] Attempting to send: {}", message);
     let sender_lock = state.chat_sender.lock().await;
     if let Some(sender) = &*sender_lock {
-        info!("[send_chat_message] Sender found, sending message");
+        debug!("[send_chat_message] Sender found, sending message");
         sender.send(message).await.map_err(|e| {
             error!("[send_chat_message] Send error: {}", e);
             e.to_string()
@@ -403,13 +399,13 @@ async fn set_access_token(state: State<'_, AppState>, token: String) -> Result<(
 
 #[tauri::command]
 async fn search_channels(state: State<'_, AppState>, query: String) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.search_channels(&query).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn follow_channel(state: State<'_, AppState>, from_user_id: String, to_user_id: String) -> Result<(), String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     if !client.is_authenticated() {
         return Err("Must be logged in to follow".to_string());
     }
@@ -418,7 +414,7 @@ async fn follow_channel(state: State<'_, AppState>, from_user_id: String, to_use
 
 #[tauri::command]
 async fn unfollow_channel(state: State<'_, AppState>, from_user_id: String, to_user_id: String) -> Result<(), String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     if !client.is_authenticated() {
         return Err("Must be logged in to unfollow".to_string());
     }
@@ -427,7 +423,7 @@ async fn unfollow_channel(state: State<'_, AppState>, from_user_id: String, to_u
 
 #[tauri::command]
 async fn get_top_streams(state: State<'_, AppState>, limit: Option<u32>) -> Result<serde_json::Value, String> {
-    let client = state.twitch_client.lock().await;
+    let client = state.twitch_client.lock().await.clone();
     client.get_top_streams(limit.unwrap_or(30)).await.map_err(|e| e.to_string())
 }
 
@@ -480,8 +476,10 @@ pub fn run() {
                 let _ = store.save();
             }
             
+            let http_client = Arc::new(client.client.clone());
             app.manage(AppState {
                 twitch_client: Mutex::new(client),
+                http_client,
                 chat_handle: Mutex::new(None),
                 chat_sender: Mutex::new(None),
                 watch_state: Mutex::new(None),
@@ -493,22 +491,18 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<AppState>();
-                    let client = state.twitch_client.lock().await;
-                    
-                    // Try to get self info to validate the token
+                    let client = state.twitch_client.lock().await.clone();
+
                     match client.get_self_info().await {
                         Ok(_) => {
                             info!("Stored token is valid");
                         }
                         Err(e) => {
                             info!("Stored token is invalid: {}, clearing...", e);
-                            drop(client); // Release lock before modifying
-                            
-                            // Clear invalid token
                             let mut client_lock = state.twitch_client.lock().await;
                             let device_id = client_lock.get_device_id().to_string();
                             *client_lock = TwitchClient::new(None, Some(device_id));
-                            
+
                             if let Ok(store) = handle.store("settings.bin") {
                                 store.delete("access_token");
                                 let _ = store.save();
@@ -524,11 +518,14 @@ pub fn run() {
                 loop {
                     interval.tick().await;
                     let state = handle.state::<AppState>();
-                    let watch_opt = state.watch_state.lock().await;
-                    if let Some(w) = &*watch_opt {
-                        let client = state.twitch_client.lock().await;
+                    let watch_data = {
+                        let w = state.watch_state.lock().await;
+                        w.as_ref().map(|w| (w.channel_login.clone(), w.channel_id.clone(), w.stream_id.clone(), w.user_id.clone()))
+                    };
+                    if let Some((channel_login, channel_id, stream_id, user_id)) = watch_data {
+                        let client = state.twitch_client.lock().await.clone();
                         if client.is_authenticated() {
-                            let _ = client.send_spade_event(&w.channel_login, &w.channel_id, &w.stream_id, &w.user_id).await;
+                            let _ = client.send_spade_event(&channel_login, &channel_id, &stream_id, &user_id).await;
                         }
                     }
                 }

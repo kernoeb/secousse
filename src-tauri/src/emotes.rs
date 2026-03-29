@@ -6,10 +6,14 @@ pub struct Emote {
     pub url: String,
 }
 
+fn default_client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
 pub async fn fetch_7tv_emotes(channel_id: &str) -> Vec<Emote> {
     let url = format!("https://7tv.io/v3/users/twitch/{}", channel_id);
-    let client = reqwest::Client::new();
-    
+    let client = default_client();
+
     let mut emotes = Vec::new();
 
     if let Ok(res) = client.get(&url).send().await {
@@ -36,7 +40,7 @@ pub async fn fetch_7tv_emotes(channel_id: &str) -> Vec<Emote> {
 
 pub async fn fetch_bttv_emotes(channel_id: &str) -> Vec<Emote> {
     let mut emotes = Vec::new();
-    let client = reqwest::Client::new();
+    let client = default_client();
 
     let url = format!("https://api.betterttv.net/3/cached/users/twitch/{}", channel_id);
     if let Ok(res) = client.get(&url).send().await {
@@ -72,7 +76,7 @@ pub async fn fetch_bttv_emotes(channel_id: &str) -> Vec<Emote> {
 
 pub async fn fetch_ffz_emotes(channel_id: &str) -> Vec<Emote> {
     let mut emotes = Vec::new();
-    let client = reqwest::Client::new();
+    let client = default_client();
 
     let url = format!("https://api.frankerfacez.com/v1/room/id/{}", channel_id);
     if let Ok(res) = client.get(&url).send().await {
@@ -101,20 +105,20 @@ pub async fn fetch_ffz_emotes(channel_id: &str) -> Vec<Emote> {
 }
 
 pub async fn fetch_global_emotes() -> Vec<Emote> {
+    let client = default_client();
     let (stv_emotes, bttv_emotes) = tokio::join!(
-        fetch_7tv_global_emotes(),
-        fetch_bttv_global_emotes()
+        fetch_7tv_global_emotes(&client),
+        fetch_bttv_global_emotes(&client)
     );
-    
+
     let mut emotes = Vec::new();
     emotes.extend(stv_emotes);
     emotes.extend(bttv_emotes);
     emotes
 }
 
-async fn fetch_7tv_global_emotes() -> Vec<Emote> {
+async fn fetch_7tv_global_emotes(client: &reqwest::Client) -> Vec<Emote> {
     let mut emotes = Vec::new();
-    let client = reqwest::Client::new();
 
     if let Ok(res) = client.get("https://7tv.io/v3/emote-sets/global").send().await {
         if let Ok(json) = res.json::<serde_json::Value>().await {
@@ -136,9 +140,8 @@ async fn fetch_7tv_global_emotes() -> Vec<Emote> {
     emotes
 }
 
-async fn fetch_bttv_global_emotes() -> Vec<Emote> {
+async fn fetch_bttv_global_emotes(client: &reqwest::Client) -> Vec<Emote> {
     let mut emotes = Vec::new();
-    let client = reqwest::Client::new();
 
     if let Ok(res) = client.get("https://api.betterttv.net/3/cached/emotes/global").send().await {
         if let Ok(json) = res.json::<serde_json::Value>().await {

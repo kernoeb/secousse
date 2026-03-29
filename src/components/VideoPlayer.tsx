@@ -38,13 +38,14 @@ export function VideoPlayer({
   // Load stream when channel changes
   useEffect(() => {
     if (!channel || !userInfo?.stream) return;
+    let cancelled = false;
 
     async function loadStream() {
       try {
         const url: string = await invoke("get_stream_url", { login: channel });
-        
-        if (!videoRef.current) return;
-        
+
+        if (cancelled || !videoRef.current) return;
+
         if (hlsRef.current) {
           hlsRef.current.destroy();
         }
@@ -117,6 +118,7 @@ export function VideoPlayer({
     loadStream();
 
     return () => {
+      cancelled = true;
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;

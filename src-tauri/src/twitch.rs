@@ -36,6 +36,7 @@ pub struct AccessToken {
     pub value: String,
 }
 
+#[derive(Clone)]
 pub struct TwitchClient {
     pub client: reqwest::Client,
     pub access_token: Option<String>,
