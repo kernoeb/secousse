@@ -5,10 +5,9 @@ pub mod emotes;
 use log::{info, error};
 use tauri::{State, Window, Manager, Emitter};
 use tauri::window::Color;
-use twitch::{TwitchClient, CHROME_UA};
+use twitch::TwitchClient;
 use tokio::sync::Mutex;
 use emotes::Emote;
-use reqwest::header::USER_AGENT;
 use tauri_plugin_store::StoreExt;
 
 pub struct WatchState {
@@ -36,31 +35,6 @@ async fn get_stream_url(state: State<'_, AppState>, login: String) -> Result<Str
     let client = state.twitch_client.lock().await;
     let token = client.get_playback_access_token(&login).await.map_err(|e| e.to_string())?;
     Ok(client.get_usher_url(&login, &token))
-}
-
-#[tauri::command]
-async fn fetch_m3u8(state: State<'_, AppState>, url: String) -> Result<String, String> {
-    let client_lock = state.twitch_client.lock().await;
-    let res = client_lock.client.get(&url)
-        .header(USER_AGENT, CHROME_UA)
-        .header("Referer", "https://www.twitch.tv/")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(res.text().await.map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-async fn fetch_bytes(state: State<'_, AppState>, url: String) -> Result<Vec<u8>, String> {
-    let client_lock = state.twitch_client.lock().await;
-    let res = client_lock.client.get(&url)
-        .header(USER_AGENT, CHROME_UA)
-        .header("Referer", "https://www.twitch.tv/")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let bytes = res.bytes().await.map_err(|e| e.to_string())?;
-    Ok(bytes.to_vec())
 }
 
 #[tauri::command]
@@ -294,7 +268,7 @@ async fn login(handle: tauri::AppHandle) -> Result<(), String> {
                     if request.contains("/callback?token=") {
                         if let Some(start) = request.find("token=") {
                             let token_start = start + 6;
-                            let token_end = request[token_start..].find(|c| c == ' ' || c == '&' || c == '\r' || c == '\n')
+                            let token_end = request[token_start..].find([' ', '&', '\r', '\n'])
                                 .map(|i| token_start + i)
                                 .unwrap_or(request.len());
                             let token = request[token_start..token_end].to_string();
@@ -563,7 +537,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_stream_url, fetch_m3u8, fetch_bytes, connect_to_chat, send_chat_message,
+            get_stream_url, connect_to_chat, send_chat_message,
             get_user_info, get_users_info, get_self_info, get_followed_channels,
             get_channel_emotes, get_global_emotes, get_global_badges, get_channel_badges,
             get_twitch_global_emotes, get_twitch_channel_emotes,

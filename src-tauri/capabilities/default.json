@@ -7,7 +7,17 @@
     "core:default",
     "opener:default",
     "shell:default",
-    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*.ttvnw.net/*" },
+        { "url": "https://*.twitch.tv/*" },
+        { "url": "https://*.live-video.net/*" },
+        { "url": "https://*.cloudfront.net/*" },
+        { "url": "https://*.jtvnw.net/*" },
+        { "url": "https://*.akamaized.net/*" }
+      ]
+    },
     "store:default",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",

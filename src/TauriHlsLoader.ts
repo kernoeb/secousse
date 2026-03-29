@@ -3,16 +3,15 @@ import {
   type LoaderCallbacks,
   type LoaderConfiguration,
   type LoaderContext,
-  type LoaderResponse,
   type LoaderStats,
 } from 'hls.js';
-import { invoke } from '@tauri-apps/api/core';
+import { fetch } from '@tauri-apps/plugin-http';
 
 export class TauriHlsLoader implements Loader<LoaderContext> {
   public context!: LoaderContext;
   public stats: LoaderStats;
   private callbacks: LoaderCallbacks<LoaderContext> | null = null;
-  private destroyed: boolean = false;
+  private abortController = new AbortController();
 
   constructor() {
     this.stats = {
@@ -29,15 +28,14 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
   }
 
   destroy(): void {
-    this.destroyed = true;
     this.callbacks = null;
+    this.abortController.abort();
   }
 
   abort(): void {
     this.stats.aborted = true;
-    if (this.callbacks?.onAbort) {
-      this.callbacks.onAbort(this.stats, this.context, undefined);
-    }
+    this.abortController.abort();
+    this.callbacks?.onAbort?.(this.stats, this.context, undefined);
   }
 
   load(
@@ -48,70 +46,42 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
     this.context = context;
     this.callbacks = callbacks;
     this.stats.loading.start = performance.now();
-
-    const isPlaylist = context.url.includes('.m3u8');
-
-    if (isPlaylist) {
-      this.loadPlaylist();
-    } else {
-      // Twitch segments usually have CORS, but since we are seeing 403/CORS issues in the logs,
-      // let's proxy them too but using fetch_bytes for efficiency.
-      this.loadSegment();
-    }
+    this.abortController.abort();
+    this.abortController = new AbortController();
+    this.doFetch();
   }
 
-  private async loadPlaylist() {
+  private async doFetch() {
+    const { signal } = this.abortController;
     try {
-      const data: string = await invoke('fetch_m3u8', { url: this.context.url });
-      if (this.destroyed || this.stats.aborted) return;
+      const isText = this.context.responseType === 'text';
+      const res = await fetch(this.context.url, { signal });
+
+      if (signal.aborted) return;
+
+      let data: string | ArrayBuffer;
+      let size: number;
+      if (isText) {
+        const text = await res.text();
+        data = text;
+        size = text.length;
+      } else {
+        const buf = await res.arrayBuffer();
+        data = buf;
+        size = buf.byteLength;
+      }
 
       const now = performance.now();
-      if (!this.stats.loading.first) this.stats.loading.first = now;
+      this.stats.loading.first ||= now;
       this.stats.loading.end = now;
-      this.stats.loaded = data.length;
-      this.stats.total = data.length;
-
-      // Crucial: Initialize sub-objects if hls.js expects them to be there
+      this.stats.loaded = size;
+      this.stats.total = size;
       this.stats.parsing = { start: now, end: now };
       this.stats.buffering = { start: now, first: now, end: now };
 
-      const response: LoaderResponse = {
-        url: this.context.url,
-        data: data,
-      };
-
-      this.callbacks?.onSuccess(response, this.stats, this.context, undefined);
+      this.callbacks?.onSuccess({ url: this.context.url, data }, this.stats, this.context, undefined);
     } catch (e) {
-      console.error('[TauriHlsLoader] Playlist fetch failed:', this.context.url, e);
-      if (this.destroyed || this.stats.aborted) return;
-      this.callbacks?.onError({ code: 0, text: String(e) }, this.context, undefined, this.stats);
-    }
-  }
-
-  private async loadSegment() {
-    try {
-      const data: number[] = await invoke('fetch_bytes', { url: this.context.url });
-      if (this.destroyed || this.stats.aborted) return;
-
-      const arrayBuffer = new Uint8Array(data).buffer;
-      const now = performance.now();
-      if (!this.stats.loading.first) this.stats.loading.first = now;
-      this.stats.loading.end = now;
-      this.stats.loaded = arrayBuffer.byteLength;
-      this.stats.total = arrayBuffer.byteLength;
-
-      this.stats.parsing = { start: now, end: now };
-      this.stats.buffering = { start: now, first: now, end: now };
-
-      const response: LoaderResponse = {
-        url: this.context.url,
-        data: arrayBuffer,
-      };
-
-      this.callbacks?.onSuccess(response, this.stats, this.context, undefined);
-    } catch (e) {
-      console.error('[TauriHlsLoader] Segment fetch failed:', this.context.url, e);
-      if (this.destroyed || this.stats.aborted) return;
+      if (signal.aborted) return;
       this.callbacks?.onError({ code: 0, text: String(e) }, this.context, undefined, this.stats);
     }
   }

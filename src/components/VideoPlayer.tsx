@@ -53,7 +53,11 @@ export function VideoPlayer({
           lowLatencyMode: true,
           loader: TauriHlsLoader,
           enableWorker: true,
-          backBufferLength: 60,
+          backBufferLength: 10,
+          liveSyncDuration: 3,
+          liveMaxLatencyDuration: 8,
+          liveSyncOnStallIncrease: 1,
+          highBufferWatchdogPeriod: 1,
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
