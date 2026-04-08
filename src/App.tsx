@@ -239,7 +239,7 @@ export default function App() {
   }, [isLoggedIn, userInfo, selfInfo?.id, isFollowing, refreshFollowedChannels]);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#0e0e10] text-[#efeff1]">
+    <div className="flex flex-col h-screen w-full bg-base text-[#e8e8ee]">
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -281,7 +281,7 @@ export default function App() {
           isLoadingBrowse={isLoadingBrowse}
         />
 
-        <main className="flex-1 bg-[#0e0e10] flex flex-col relative overflow-hidden">
+        <main className="flex-1 bg-base flex flex-col relative overflow-hidden">
           {channel ? (
             <>
               <VideoPlayer

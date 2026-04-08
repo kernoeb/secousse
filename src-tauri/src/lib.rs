@@ -4,7 +4,6 @@ pub mod emotes;
 
 use log::{info, debug, error};
 use tauri::{State, Window, Manager, Emitter};
-use tauri::window::Color;
 use twitch::TwitchClient;
 use tokio::sync::Mutex;
 use emotes::Emote;
@@ -446,14 +445,35 @@ pub fn run() {
         .setup(|app| {
             // Create window programmatically with full control
             use tauri::WebviewWindowBuilder;
-            
-            let window = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+
+            let win_builder = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("Secousse")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 700.0)
-                .background_color(Color(24, 24, 27, 255))
-                .visible(false)
-                .build()?;
+                .visible(false);
+
+            #[cfg(target_os = "macos")]
+            let win_builder = win_builder.title_bar_style(tauri::TitleBarStyle::Transparent);
+
+            let window = win_builder.build()?;
+
+            #[cfg(target_os = "macos")]
+            {
+                use cocoa::appkit::{NSColor, NSWindow};
+                use cocoa::base::{id, nil};
+
+                let ns_window = window.ns_window().unwrap() as id;
+                unsafe {
+                    let bg_color = NSColor::colorWithRed_green_blue_alpha_(
+                        nil,
+                        15.0 / 255.0,
+                        15.0 / 255.0,
+                        20.0 / 255.0,
+                        1.0,
+                    );
+                    ns_window.setBackgroundColor_(bg_color);
+                }
+            }
             
             // Safety fallback: Force show window after 2s if frontend doesn't signal ready
             // This prevents the app from being "invisible" if JS crashes

@@ -173,18 +173,18 @@ export function VideoPlayer({
   if (userInfo && !userInfo.stream && !isLoadingStream) {
     return (
       <div className="flex-1 relative bg-black">
-        <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+        <div className="absolute inset-0 flex items-center justify-center bg-base">
           <div className="flex flex-col items-center gap-4 text-center">
             {userInfo?.profileImageURL && (
               <img
                 src={userInfo.profileImageURL}
                 alt={userInfo.displayName}
-                className="w-24 h-24 rounded-full border-4 border-[#3f3f46]"
+                className="w-24 h-24 rounded-full border-4 border-border"
               />
             )}
             <div>
               <h2 className="text-xl font-bold text-white">{userInfo?.displayName || channel}</h2>
-              <p className="text-[#adadb8] mt-1">Channel is currently offline</p>
+              <p className="text-muted mt-1">Channel is currently offline</p>
             </div>
           </div>
         </div>
@@ -218,7 +218,7 @@ export function VideoPlayer({
       {isLoadingStream && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="flex flex-col items-center gap-3">
-            <Loader2 className="w-10 h-10 text-[#9146ff] animate-spin" />
+            <Loader2 className="w-10 h-10 text-twitch animate-spin" />
             <span className="text-white text-sm">Loading stream...</span>
           </div>
         </div>
@@ -298,16 +298,16 @@ export function VideoPlayer({
             {showQualityMenu && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowQualityMenu(false)} />
-                <div className="absolute bottom-full right-0 mb-2 bg-[#18181b] border border-[#3f3f46] rounded-lg shadow-xl overflow-hidden min-w-[140px] z-20">
-                  <div className="p-2 border-b border-[#3f3f46] text-xs text-[#adadb8] font-semibold">
+                <div className="absolute bottom-full right-0 mb-2 bg-elevated border border-border rounded-lg shadow-xl overflow-hidden min-w-[140px] z-20">
+                  <div className="p-2 border-b border-border text-xs text-muted font-semibold">
                     Quality
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <button
                       onClick={() => changeQuality(-1)}
                       className={cn(
-                        "w-full px-3 py-2 text-left text-sm hover:bg-[#2f2f35] flex items-center justify-between",
-                        currentQuality === -1 && "text-[#9146ff]"
+                        "w-full px-3 py-2 text-left text-sm hover:bg-hover flex items-center justify-between",
+                        currentQuality === -1 && "text-twitch"
                       )}
                     >
                       Auto
@@ -318,8 +318,8 @@ export function VideoPlayer({
                         key={q.id}
                         onClick={() => changeQuality(q.id)}
                         className={cn(
-                          "w-full px-3 py-2 text-left text-sm hover:bg-[#2f2f35] flex items-center justify-between",
-                          currentQuality === q.id && "text-[#9146ff]"
+                          "w-full px-3 py-2 text-left text-sm hover:bg-hover flex items-center justify-between",
+                          currentQuality === q.id && "text-twitch"
                         )}
                       >
                         {q.label}

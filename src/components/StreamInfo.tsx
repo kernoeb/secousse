@@ -12,20 +12,20 @@ interface StreamInfoProps {
 
 export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollow }: StreamInfoProps) {
   return (
-    <div className="bg-[#0e0e10] p-4 flex items-start gap-4 border-t border-white/5">
-      <div className="w-16 h-16 bg-[#1f1f23] rounded-full flex-shrink-0 overflow-hidden border-2 border-[#9146ff] shadow-lg shadow-[#9146ff]/10">
+    <div className="bg-surface p-4 flex items-start gap-4 border-t border-border">
+      <div className="w-16 h-16 bg-elevated rounded-full flex-shrink-0 overflow-hidden border-2 border-twitch shadow-lg shadow-twitch/10">
         {userInfo?.profileImageURL && <img src={userInfo.profileImageURL} alt="pfp" />}
       </div>
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg font-bold truncate leading-tight tracking-tight text-[#efeff1]">
+        <h1 className="text-lg font-bold truncate leading-tight tracking-tight">
           {userInfo?.stream?.title || `${channel} - Streaming`}
         </h1>
         <div className="flex items-center gap-2 mt-1 text-sm">
-          <span className="text-[#9146ff] font-bold hover:underline cursor-pointer">
+          <span className="text-twitch font-bold hover:underline cursor-pointer">
             {userInfo?.displayName || channel}
           </span>
-          <span className="text-[#adadb8] opacity-50">•</span>
-          <span className="text-[#9146ff] hover:underline cursor-pointer font-semibold">
+          <span className="text-muted opacity-50">&bull;</span>
+          <span className="text-twitch hover:underline cursor-pointer font-semibold">
             {userInfo?.stream?.game?.displayName || "Just Chatting"}
           </span>
         </div>
@@ -38,8 +38,8 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
             className={cn(
               "px-4 py-1.5 rounded-md font-bold text-sm flex items-center gap-2 transition-all active:scale-95 text-white",
               isFollowing
-                ? "bg-[#2f2f35] hover:bg-[#3f3f46]"
-                : "bg-[#9146ff] hover:bg-[#772ce8] shadow-lg shadow-[#9146ff]/20",
+                ? "bg-elevated hover:bg-hover"
+                : "bg-twitch hover:bg-twitch-dark shadow-lg shadow-twitch/20",
               !isLoggedIn && "opacity-50 cursor-not-allowed"
             )}
           >

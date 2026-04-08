@@ -59,20 +59,20 @@ export function Chat({
     <>
       <aside
         className={cn(
-          "bg-[#18181b] border-l border-black flex flex-col shadow-2xl z-30 transition-all duration-300 relative",
+          "bg-surface border-l border-border flex flex-col z-30 transition-all duration-300 relative",
           isOpen ? "w-[340px]" : "w-0 overflow-hidden"
         )}
       >
-        <div className="h-12 flex items-center justify-between px-4 border-b border-black bg-[#18181b]">
+        <div className="h-12 flex items-center justify-between px-4 border-b border-border">
           <button
             onClick={() => setIsOpen(false)}
-            className="p-1.5 hover:bg-[#2f2f35] rounded-md transition-colors opacity-80 hover:opacity-100"
+            className="p-1.5 hover:bg-hover rounded-md transition-colors opacity-80 hover:opacity-100"
             title="Close chat"
           >
             <PanelRight className="w-4 h-4" />
           </button>
-          <span className="font-bold text-[11px] uppercase tracking-[0.1em] opacity-80">Stream Chat</span>
-          <button className="p-1.5 hover:bg-[#2f2f35] rounded-md transition-colors opacity-80 hover:opacity-100">
+          <span className="font-bold text-[11px] uppercase tracking-[0.1em] text-muted">Stream Chat</span>
+          <button className="p-1.5 hover:bg-hover rounded-md transition-colors opacity-80 hover:opacity-100">
             <User className="w-4 h-4" />
           </button>
         </div>
@@ -98,13 +98,13 @@ export function Chat({
         {!isAtBottom && (
           <button
             onClick={onScrollToBottom}
-            className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-[#9146ff] hover:bg-[#772ce8] text-white text-xs px-3 py-1.5 rounded-full shadow-lg transition-all z-10"
+            className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-twitch hover:bg-twitch-dark text-white text-xs px-3 py-1.5 rounded-full shadow-lg transition-all z-10"
           >
             Scroll to bottom
           </button>
         )}
 
-        <div className="p-3 bg-[#18181b] border-t border-black">
+        <div className="p-3 border-t border-border">
           <div className="relative mb-3">
             <textarea
               placeholder={!isLoggedIn ? "Log in to chat" : !isConnected ? "Connecting to chat..." : "Send a message"}
@@ -113,20 +113,20 @@ export function Chat({
               onKeyDown={handleKeyDown}
               disabled={!isLoggedIn || !isConnected}
               className={cn(
-                "w-full bg-[#0e0e10] border border-[#3f3f46] rounded-md p-2 text-sm focus:outline-none focus:border-[#9146ff] resize-none min-h-[44px] max-h-[160px] transition-all placeholder:text-white/20",
+                "w-full bg-base border border-border rounded-md p-2 text-sm focus:outline-none focus:border-twitch resize-none min-h-[44px] max-h-[160px] transition-all placeholder:text-muted/40",
                 (!isLoggedIn || !isConnected) && "opacity-50 cursor-not-allowed"
               )}
             />
           </div>
           <div className="flex items-center justify-between">
-            <button className="p-2 hover:bg-[#2f2f35] rounded-md transition-colors group">
-              <Settings className="w-4 h-4 text-[#adadb8] group-hover:text-[#efeff1]" />
+            <button className="p-2 hover:bg-hover rounded-md transition-colors group">
+              <Settings className="w-4 h-4 text-muted group-hover:text-[#e8e8ee]" />
             </button>
             <button
               onClick={handleSend}
               disabled={!isLoggedIn || !isConnected || !chatInput.trim()}
               className={cn(
-                "bg-[#9146ff] hover:bg-[#772ce8] px-4 py-1.5 rounded-md font-bold text-[13px] transition-all shadow-lg shadow-[#9146ff]/20 active:scale-95 text-white flex items-center gap-2",
+                "bg-twitch hover:bg-twitch-dark px-4 py-1.5 rounded-md font-bold text-[13px] transition-all shadow-lg shadow-twitch/20 active:scale-95 text-white flex items-center gap-2",
                 (!isLoggedIn || !isConnected || !chatInput.trim()) && "opacity-50 cursor-not-allowed"
               )}
             >
@@ -140,7 +140,7 @@ export function Chat({
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="absolute right-4 top-16 bg-[#9146ff] hover:bg-[#772ce8] p-2 rounded-md z-40 transition-all"
+          className="absolute right-4 top-16 bg-twitch hover:bg-twitch-dark p-2 rounded-md z-40 transition-all"
           title="Open chat"
         >
           <PanelLeft className="w-5 h-5 text-white" />
@@ -185,7 +185,7 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
 
   return (
     <div className="text-[13px] leading-tight break-words py-0.5">
-      <span className="text-[#adadb8] mr-2 text-[11px]">
+      <span className="text-muted mr-2 text-[11px]">
         {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
       </span>
       <span className="inline-flex gap-0.5 mr-1 align-middle">
@@ -194,7 +194,7 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
         ))}
       </span>
       <span
-        className="font-bold hover:bg-[#2f2f35] cursor-pointer rounded px-1 -ml-1 mr-1"
+        className="font-bold hover:bg-hover cursor-pointer rounded px-1 -ml-1 mr-1"
         style={{ color: msg.color || "#ff8280" }}
       >
         {msg.user}:

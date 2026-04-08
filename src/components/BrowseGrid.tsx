@@ -18,13 +18,13 @@ export function BrowseGrid({ streams, isLoading, isLoggedIn, onSelectChannel, on
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
-          <div className="text-[#adadb8]">Loading streams...</div>
+          <div className="text-muted">Loading streams...</div>
         </div>
       ) : streams.length === 0 ? (
         <div className="flex items-center justify-center h-64">
-          <div className="text-[#adadb8]">
+          <div className="text-muted">
             No streams found.{" "}
-            <button onClick={onRetry} className="text-[#9146ff] hover:underline">
+            <button onClick={onRetry} className="text-twitch hover:underline">
               Retry
             </button>
           </div>
@@ -49,10 +49,10 @@ function StreamCard({ stream, onSelect }: StreamCardProps) {
   return (
     <button
       onClick={onSelect}
-      className="bg-[#1f1f23] rounded-lg overflow-hidden hover:bg-[#2f2f35] transition-colors text-left group"
+      className="bg-surface rounded-lg overflow-hidden hover:bg-surface-alt transition-colors text-left group"
     >
       {/* Stream Preview */}
-      <div className="relative aspect-video bg-[#18181b]">
+      <div className="relative aspect-video bg-base">
         {stream.previewImageURL && (
           <img src={stream.previewImageURL} alt={stream.title} className="w-full h-full object-cover" />
         )}
@@ -67,7 +67,7 @@ function StreamCard({ stream, onSelect }: StreamCardProps) {
 
       {/* Stream Info */}
       <div className="p-3 flex gap-3">
-        <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-[#3f3f46]">
+        <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-elevated">
           {stream.broadcaster.profileImageURL && (
             <img
               src={stream.broadcaster.profileImageURL}
@@ -77,11 +77,11 @@ function StreamCard({ stream, onSelect }: StreamCardProps) {
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-sm truncate group-hover:text-[#9146ff] transition-colors">
+          <h3 className="font-semibold text-sm truncate group-hover:text-twitch transition-colors">
             {stream.title}
           </h3>
-          <p className="text-[#adadb8] text-sm truncate">{stream.broadcaster.displayName}</p>
-          <p className="text-[#adadb8] text-xs truncate">{stream.game?.displayName || "Streaming"}</p>
+          <p className="text-muted text-sm truncate">{stream.broadcaster.displayName}</p>
+          <p className="text-muted text-xs truncate">{stream.game?.displayName || "Streaming"}</p>
         </div>
       </div>
     </button>

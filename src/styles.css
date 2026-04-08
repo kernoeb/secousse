@@ -3,6 +3,13 @@
 @theme {
   --color-twitch: #9146ff;
   --color-twitch-dark: #772ce8;
+  --color-base: #0f0f14;
+  --color-surface: #16161e;
+  --color-surface-alt: #1c1c27;
+  --color-elevated: #23232f;
+  --color-hover: #2a2a38;
+  --color-border: #2a2a38;
+  --color-muted: #8b8b9e;
 }
 
 :root {
@@ -11,8 +18,8 @@
   font-weight: 400;
 
   color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #18181b;
+  color: #e8e8ee;
+  background-color: var(--color-base);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -21,7 +28,7 @@
 }
 
 html, body {
-  background-color: #18181b;
+  background-color: var(--color-base);
 }
 
 body {

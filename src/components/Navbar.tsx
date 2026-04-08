@@ -44,7 +44,7 @@ export function Navbar({
   onGoHome,
 }: NavbarProps) {
   return (
-    <nav className="h-12 border-b border-black flex items-center justify-between px-4 bg-[#18181b] z-50">
+    <nav className="h-12 border-b border-border flex items-center justify-between px-4 bg-surface-alt z-50">
       <div className="flex items-center gap-4 h-full">
         <button
           onClick={onGoHome}
@@ -61,8 +61,8 @@ export function Navbar({
           className={cn(
             "font-semibold text-sm px-3 h-full cursor-pointer transition-colors",
             activeTab === "following"
-              ? "text-[#9146ff] border-b-2 border-[#9146ff]"
-              : "hover:text-[#9146ff]"
+              ? "text-twitch border-b-2 border-twitch"
+              : "text-muted hover:text-[#e8e8ee]"
           )}
         >
           Following
@@ -77,8 +77,8 @@ export function Navbar({
           className={cn(
             "font-semibold text-sm px-3 h-full cursor-pointer transition-colors",
             activeTab === "browse"
-              ? "text-[#9146ff] border-b-2 border-[#9146ff]"
-              : "hover:text-[#9146ff]"
+              ? "text-twitch border-b-2 border-twitch"
+              : "text-muted hover:text-[#e8e8ee]"
           )}
         >
           Browse
@@ -93,34 +93,34 @@ export function Navbar({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => searchQuery && setShowSearchResults(true)}
-            className="w-full bg-[#18181b] border border-[#3f3f46] rounded-l-md py-1 px-3 text-sm focus:outline-none focus:border-[#9146ff] transition-colors"
+            className="w-full bg-surface border border-border rounded-l-md py-1 px-3 text-sm focus:outline-none focus:border-twitch transition-colors placeholder:text-muted/50"
           />
           {searchQuery && (
             <button
               onClick={onClearSearch}
-              className="absolute right-10 top-1/2 -translate-y-1/2 p-1 hover:bg-[#3f3f46] rounded"
+              className="absolute right-10 top-1/2 -translate-y-1/2 p-1 hover:bg-hover rounded"
             >
-              <X className="w-3 h-3 text-[#adadb8]" />
+              <X className="w-3 h-3 text-muted" />
             </button>
           )}
           <button
             onClick={onSearch}
-            className="bg-[#2f2f35] px-2 rounded-r-md border-y border-r border-[#3f3f46] hover:bg-[#3f3f46]"
+            className="bg-elevated px-2 rounded-r-md border-y border-r border-border hover:bg-hover"
           >
-            <Search className="w-4 h-4 text-[#efeff1]" />
+            <Search className="w-4 h-4 text-[#e8e8ee]" />
           </button>
         </div>
 
         {/* Search Results Dropdown */}
         {showSearchResults && searchResults.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-[#18181b] border border-[#3f3f46] rounded-md shadow-xl z-[60] max-h-96 overflow-y-auto">
+          <div className="absolute top-full left-0 right-0 mt-1 bg-elevated border border-border rounded-md shadow-xl z-[60] max-h-96 overflow-y-auto">
             {searchResults.map((result) => (
               <button
                 key={result.id}
                 onClick={() => onSelectSearchResult(result)}
-                className="w-full flex items-center gap-3 p-3 hover:bg-[#2f2f35] transition-colors text-left"
+                className="w-full flex items-center gap-3 p-3 hover:bg-hover transition-colors text-left"
               >
-                <div className="w-10 h-10 rounded-full overflow-hidden bg-[#3f3f46] flex-shrink-0">
+                <div className="w-10 h-10 rounded-full overflow-hidden bg-surface flex-shrink-0">
                   {result.profileImageURL && (
                     <img src={result.profileImageURL} alt={result.login} className="w-full h-full object-cover" />
                   )}
@@ -128,7 +128,7 @@ export function Navbar({
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm truncate">{result.displayName}</div>
                   {result.stream ? (
-                    <div className="flex items-center gap-2 text-xs text-[#adadb8]">
+                    <div className="flex items-center gap-2 text-xs text-muted">
                       <span className="flex items-center gap-1">
                         <div className="w-2 h-2 bg-red-600 rounded-full" />
                         {formatViewers(result.stream.viewersCount)}
@@ -136,7 +136,7 @@ export function Navbar({
                       <span className="truncate">{result.stream.game?.displayName || "Streaming"}</span>
                     </div>
                   ) : (
-                    <div className="text-xs text-[#adadb8]">Offline</div>
+                    <div className="text-xs text-muted">Offline</div>
                   )}
                 </div>
               </button>
@@ -157,19 +157,19 @@ export function Navbar({
         {isLoggedIn ? (
           <button
             onClick={onLogout}
-            className="flex items-center gap-2 bg-[#2f2f35] hover:bg-[#3f3f46] px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
+            className="flex items-center gap-2 bg-elevated hover:bg-hover px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
           >
             Logout
           </button>
         ) : (
           <button
             onClick={onLogin}
-            className="flex items-center gap-2 bg-[#9146ff] hover:bg-[#772ce8] px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
+            className="flex items-center gap-2 bg-twitch hover:bg-twitch-dark px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
           >
             <LogIn className="w-4 h-4" /> Log In
           </button>
         )}
-        <div className="w-8 h-8 bg-[#3f3f46] rounded-full flex items-center justify-center overflow-hidden border border-white/10 cursor-pointer">
+        <div className="w-8 h-8 bg-elevated rounded-full flex items-center justify-center overflow-hidden border border-border cursor-pointer">
           {isLoggedIn && selfInfo?.profileImageURL ? (
             <img src={selfInfo.profileImageURL} alt="My profile" className="w-full h-full object-cover" />
           ) : (
