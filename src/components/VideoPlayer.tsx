@@ -66,7 +66,7 @@ export function VideoPlayer({
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
+                if (!videoRef.current?.paused) hls.startLoad();
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
                 hls.recoverMediaError();
@@ -204,8 +204,14 @@ export function VideoPlayer({
         className="w-full h-full object-contain shadow-2xl"
         autoPlay
         playsInline
-        onPlay={() => setIsPaused(false)}
-        onPause={() => setIsPaused(true)}
+        onPlay={() => {
+          setIsPaused(false);
+          hlsRef.current?.startLoad(-1);
+        }}
+        onPause={() => {
+          setIsPaused(true);
+          hlsRef.current?.stopLoad();
+        }}
         onVolumeChange={(e) => {
           const video = e.currentTarget;
           setIsMuted(video.muted);
