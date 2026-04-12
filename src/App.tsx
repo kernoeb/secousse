@@ -4,7 +4,7 @@ import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
 import { useAuth, useChat, useEmotes, useSearch, useTopStreams } from "./hooks";
 import { Navbar, Sidebar, VideoPlayer, Chat, StreamInfo, BrowseGrid } from "./components";
-import { getInitialChannel, getInitialActiveTab, persistChannel, persistActiveTab } from "./lib/utils";
+import { getInitialChannel, getInitialActiveTab, persistChannel, persistActiveTab, getInitialSidebarOpen, getInitialChatOpen, persistSidebarOpen, persistChatOpen } from "./lib/utils";
 import type { UserInfo, ActiveTab, GetUserInfoResponse } from "./types";
 
 export default function App() {
@@ -16,8 +16,8 @@ export default function App() {
   
   // UI state
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(getInitialActiveTab);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpenInternal] = useState(getInitialSidebarOpen);
+  const [isChatOpen, setIsChatOpenInternal] = useState(getInitialChatOpen);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Custom hooks
@@ -41,6 +41,18 @@ export default function App() {
   const setActiveTab = useCallback((tab: ActiveTab) => {
     persistActiveTab(tab);
     setActiveTabInternal(tab);
+  }, []);
+
+  // Wrapper to persist sidebar state
+  const setIsSidebarOpen = useCallback((open: boolean) => {
+    persistSidebarOpen(open);
+    setIsSidebarOpenInternal(open);
+  }, []);
+
+  // Wrapper to persist chat state
+  const setIsChatOpen = useCallback((open: boolean) => {
+    persistChatOpen(open);
+    setIsChatOpenInternal(open);
   }, []);
 
   // Search hook with channel selection callback

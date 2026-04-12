@@ -44,3 +44,31 @@ export function persistChannel(channel: string | null) {
 export function persistActiveTab(tab: "following" | "browse") {
   localStorage.setItem("activeTab", tab);
 }
+
+/** Get initial sidebar open state from storage */
+export function getInitialSidebarOpen(): boolean {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("sidebarOpen");
+    if (saved !== null) return saved === "true";
+  }
+  return true;
+}
+
+/** Get initial chat open state from storage */
+export function getInitialChatOpen(): boolean {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("chatOpen");
+    if (saved !== null) return saved === "true";
+  }
+  return true;
+}
+
+/** Persist sidebar open state to storage */
+export function persistSidebarOpen(open: boolean) {
+  localStorage.setItem("sidebarOpen", String(open));
+}
+
+/** Persist chat open state to storage */
+export function persistChatOpen(open: boolean) {
+  localStorage.setItem("chatOpen", String(open));
+}
