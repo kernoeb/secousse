@@ -75,6 +75,13 @@ export interface SearchResult {
 // Chat Types
 // ============================================
 
+/** A Twitch emote range from the IRC `emotes=` tag (positions are code-point indices). */
+export interface ChatEmoteRange {
+  id: string;
+  start: number;
+  end: number;
+}
+
 /** Chat message from IRC */
 export interface ChatMessage {
   id: string;
@@ -82,6 +89,7 @@ export interface ChatMessage {
   message: string;
   color?: string;
   badges: [string, string][];
+  emotes: ChatEmoteRange[];
   timestamp: number;
   channel: string;
 }

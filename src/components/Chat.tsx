@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { PanelRight, PanelLeft, User, Settings, Send } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn, twitchEmoteUrl } from "../lib/utils";
 import type { ChatMessage, TwitchBadge } from "../types";
 
 interface ChatProps {
@@ -174,14 +174,38 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
   }, [msg.badges, globalBadges, channelBadges]);
 
   const parts = useMemo(() => {
-    return msg.message.split(" ").map((word, i) => {
-      const emoteUrl = emotes.get(word);
-      if (emoteUrl) {
-        return <img key={i} src={emoteUrl} alt={word} className="inline-block h-6 mx-0.5 align-middle" />;
+    const codepoints = Array.from(msg.message);
+    const ranges = msg.emotes
+      .filter(r => r.start <= r.end && r.end < codepoints.length)
+      .sort((a, b) => a.start - b.start);
+
+    const emoteImg = (key: string, src: string, alt: string) => (
+      <img key={key} src={src} alt={alt} className="inline-block h-6 mx-0.5 align-middle" />
+    );
+
+    // split on whitespace runs and keep them as separators so output preserves spacing
+    const renderText = (text: string, keyPrefix: string) =>
+      text.split(/(\s+)/).map((word, i) => {
+        if (!word) return null;
+        const url = emotes.get(word);
+        return url ? emoteImg(`${keyPrefix}-${i}`, url, word) : word;
+      });
+
+    const out: React.ReactNode[] = [];
+    let cursor = 0;
+    ranges.forEach((r, idx) => {
+      if (r.start > cursor) {
+        out.push(...renderText(codepoints.slice(cursor, r.start).join(""), `t${idx}`));
       }
-      return <span key={i}>{word} </span>;
+      const name = codepoints.slice(r.start, r.end + 1).join("");
+      out.push(emoteImg(`e${idx}`, twitchEmoteUrl(r.id), name));
+      cursor = r.end + 1;
     });
-  }, [msg.message, emotes]);
+    if (cursor < codepoints.length) {
+      out.push(...renderText(codepoints.slice(cursor).join(""), "tail"));
+    }
+    return out;
+  }, [msg.message, msg.emotes, emotes]);
 
   return (
     <div className="text-[13px] leading-tight break-words py-0.5">

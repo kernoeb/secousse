@@ -72,3 +72,8 @@ export function persistSidebarOpen(open: boolean) {
 export function persistChatOpen(open: boolean) {
   localStorage.setItem("chatOpen", String(open));
 }
+
+/** Build a Twitch emote CDN URL from an emote ID. */
+export function twitchEmoteUrl(id: string, size: "1.0" | "2.0" | "3.0" = "2.0"): string {
+  return `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/${size}`;
+}

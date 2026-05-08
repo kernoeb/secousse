@@ -7,12 +7,20 @@ use tokio::sync::mpsc;
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmoteRange {
+    pub id: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub id: String,
     pub user: String,
     pub message: String,
     pub color: Option<String>,
     pub badges: Vec<(String, String)>,
+    pub emotes: Vec<EmoteRange>,
     pub channel: String,
 }
 
@@ -129,6 +137,13 @@ pub async fn connect_chat(
     Ok(ChatConnection { sender: tx })
 }
 
+fn irc_tag<'a>(tags: &'a str, key: &str) -> Option<&'a str> {
+    tags.split(';').find_map(|s| {
+        let rest = s.strip_prefix(key)?;
+        rest.strip_prefix('=')
+    })
+}
+
 fn parse_irc_message(text: &str) -> Option<ChatMessage> {
     let parts: Vec<&str> = text.splitn(2, " PRIVMSG #").collect();
     if parts.len() < 2 { return None; }
@@ -138,30 +153,14 @@ fn parse_irc_message(text: &str) -> Option<ChatMessage> {
     if content_parts.len() < 2 { return None; }
 
     let message = content_parts[1].trim();
-    
-    // Extract message ID for deduplication
-    let id = tags_part.split(';')
-        .find(|s| s.starts_with("id="))
-        .and_then(|s| s.split('=').nth(1))
-        .unwrap_or("")
-        .to_string();
-    
-    let user = tags_part.split(';')
-        .find(|s| s.starts_with("display-name="))
-        .and_then(|s| s.split('=').nth(1))
-        .unwrap_or("Unknown");
 
-    let color = tags_part.split(';')
-        .find(|s| s.starts_with("color="))
-        .and_then(|s| s.split('=').nth(1))
+    let id = irc_tag(tags_part, "id").unwrap_or("").to_string();
+    let user = irc_tag(tags_part, "display-name").unwrap_or("Unknown");
+    let color = irc_tag(tags_part, "color")
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    let badges_str = tags_part.split(';')
-        .find(|s| s.starts_with("badges="))
-        .and_then(|s| s.split('=').nth(1))
-        .unwrap_or("");
-
+    let badges_str = irc_tag(tags_part, "badges").unwrap_or("");
     let mut badges = Vec::new();
     for b in badges_str.split(',') {
         let pair: Vec<&str> = b.split('/').collect();
@@ -170,12 +169,33 @@ fn parse_irc_message(text: &str) -> Option<ChatMessage> {
         }
     }
 
+    let emotes_str = irc_tag(tags_part, "emotes").unwrap_or("");
+
+    let mut emotes = Vec::new();
+    if !emotes_str.is_empty() {
+        // IRC tag format: id1:start-end,start-end/id2:start-end (positions are 0-indexed inclusive code points)
+        for emote_group in emotes_str.split('/') {
+            let group_parts: Vec<&str> = emote_group.splitn(2, ':').collect();
+            if group_parts.len() != 2 { continue; }
+            let id = group_parts[0];
+            for range in group_parts[1].split(',') {
+                let bounds: Vec<&str> = range.split('-').collect();
+                if bounds.len() != 2 { continue; }
+                if let (Ok(start), Ok(end)) = (bounds[0].parse::<usize>(), bounds[1].parse::<usize>()) {
+                    emotes.push(EmoteRange { id: id.to_string(), start, end });
+                }
+            }
+        }
+        emotes.sort_by_key(|e| e.start);
+    }
+
     Some(ChatMessage {
         id,
         user: user.to_string(),
         message: message.to_string(),
         color,
         badges,
+        emotes,
         channel: String::new(), // Will be set by caller
     })
 }
