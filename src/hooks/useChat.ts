@@ -13,6 +13,7 @@ interface UseChatReturn {
   sendMessage: (message: string) => Promise<void>;
   handleScroll: () => void;
   scrollToBottom: () => void;
+  onMessageImageLoad: () => void;
 }
 
 export function useChat(channel: string | null, isLoggedIn: boolean): UseChatReturn {
@@ -150,13 +151,29 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
 
   // Track if user manually scrolled
   const userScrolledRef = useRef(false);
+  const isAtBottomRef = useRef(true);
+  useEffect(() => { isAtBottomRef.current = isAtBottom; }, [isAtBottom]);
 
-  // Auto-scroll when at bottom and user hasn't manually scrolled up
-  useEffect(() => {
-    if (isAtBottom && !userScrolledRef.current) {
+  // Coalesces N scroll calls per frame into one. Hot at chat open, where
+  // hundreds of <img onLoad> fire near-simultaneously.
+  const scrollRafRef = useRef<number | null>(null);
+  const pinToBottomIfFollowing = useCallback(() => {
+    if (!isAtBottomRef.current || userScrolledRef.current) return;
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
       chatEndRef.current?.scrollIntoView({ behavior: "auto" });
-    }
-  }, [messages, isAtBottom]);
+    });
+  }, []);
+
+  useEffect(() => {
+    pinToBottomIfFollowing();
+  }, [messages, isAtBottom, pinToBottomIfFollowing]);
+
+  // Re-pin after each emote image loads — non-square emotes (e.g. Kappa 25×28)
+  // and 7TV wide animated emotes shift layout *after* the [messages] effect
+  // already scrolled, leaving the newest message clipped below the viewport.
+  const onMessageImageLoad = pinToBottomIfFollowing;
 
   const handleScroll = useCallback(() => {
     const container = chatContainerRef.current;
@@ -201,5 +218,6 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     sendMessage,
     handleScroll,
     scrollToBottom,
+    onMessageImageLoad,
   };
 }

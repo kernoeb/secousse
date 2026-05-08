@@ -18,6 +18,7 @@ interface ChatProps {
   onScroll: () => void;
   onScrollToBottom: () => void;
   onSendMessage: (message: string) => void;
+  onMessageImageLoad: () => void;
 }
 
 export function Chat({
@@ -35,6 +36,7 @@ export function Chat({
   onScroll,
   onScrollToBottom,
   onSendMessage,
+  onMessageImageLoad,
 }: ChatProps) {
   const [chatInput, setChatInput] = useState("");
 
@@ -89,6 +91,7 @@ export function Chat({
               emotes={emotes}
               globalBadges={globalBadges}
               channelBadges={channelBadges}
+              onImageLoad={onMessageImageLoad}
             />
           ))}
           <div ref={chatEndRef} />
@@ -155,9 +158,10 @@ interface ChatMessageViewProps {
   emotes: Map<string, string>;
   globalBadges: TwitchBadge[];
   channelBadges: TwitchBadge[];
+  onImageLoad: () => void;
 }
 
-const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessageViewProps) {
+const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadges, channelBadges, onImageLoad }: ChatMessageViewProps) {
   const badgeUrls = useMemo(() => {
     if (!msg.badges) return [];
     return msg.badges
@@ -179,11 +183,9 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadge
       .filter(r => r.start <= r.end && r.end < codepoints.length)
       .sort((a, b) => a.start - b.start);
 
-    // width/height attrs reserve a 1:1 layout box before load — without them the
-    // image is 0 wide until fetched, which re-wraps the surrounding text and
-    // shifts the message vertically after auto-scroll has already fired.
+    // onLoad re-pins scroll after late layout shifts (see useChat#pinToBottomIfFollowing).
     const emoteImg = (key: string, src: string, alt: string) => (
-      <img key={key} src={src} alt={alt} width={28} height={28} loading="lazy" decoding="async" className="inline-block h-6 mx-0.5 align-middle" />
+      <img key={key} src={src} alt={alt} loading="lazy" decoding="async" onLoad={onImageLoad} className="inline-block h-6 mx-0.5 align-middle" />
     );
 
     // split on whitespace runs and keep them as separators so output preserves spacing
@@ -208,7 +210,7 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadge
       out.push(...renderText(codepoints.slice(cursor).join(""), "tail"));
     }
     return out;
-  }, [msg.message, msg.emotes, emotes]);
+  }, [msg.message, msg.emotes, emotes, onImageLoad]);
 
   return (
     <div className="text-[13px] leading-tight break-words py-0.5">

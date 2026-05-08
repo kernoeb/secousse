@@ -338,6 +338,7 @@ export default function App() {
           onScroll={chat.handleScroll}
           onScrollToBottom={chat.scrollToBottom}
           onSendMessage={chat.sendMessage}
+          onMessageImageLoad={chat.onMessageImageLoad}
         />
       </div>
     </div>
