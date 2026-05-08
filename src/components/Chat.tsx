@@ -82,19 +82,22 @@ export function Chat({
         <div
           ref={chatContainerRef}
           onScroll={onScroll}
-          className="flex-1 p-3 overflow-y-auto custom-scrollbar"
+          className="flex-1 overflow-y-auto custom-scrollbar flex flex-col"
         >
-          {messages.map((m, i) => (
-            <ChatMessageView
-              key={i}
-              msg={m}
-              emotes={emotes}
-              globalBadges={globalBadges}
-              channelBadges={channelBadges}
-              onImageLoad={onMessageImageLoad}
-            />
-          ))}
-          <div ref={chatEndRef} />
+          {/* mt-auto pins messages to the bottom when they don't fill the viewport */}
+          <div className="mt-auto p-3">
+            {messages.map((m, i) => (
+              <ChatMessageView
+                key={i}
+                msg={m}
+                emotes={emotes}
+                globalBadges={globalBadges}
+                channelBadges={channelBadges}
+                onImageLoad={onMessageImageLoad}
+              />
+            ))}
+            <div ref={chatEndRef} />
+          </div>
         </div>
 
         {/* Scroll to bottom button */}
