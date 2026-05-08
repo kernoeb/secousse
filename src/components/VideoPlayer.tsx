@@ -4,7 +4,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { debug, error as logError } from "@tauri-apps/plugin-log";
 import { Play, Pause, Volume2, VolumeX, Settings, Maximize, Minimize, Loader2 } from "lucide-react";
 import { TauriHlsLoader } from "../TauriHlsLoader";
-import { cn, formatViewers } from "../lib/utils";
+import {
+  cn,
+  formatViewers,
+  AUTO_QUALITY,
+  getInitialVolume,
+  persistVolume,
+  getInitialMuted,
+  persistMuted,
+  getInitialPreferredQualityHeight,
+  persistPreferredQualityHeight,
+} from "../lib/utils";
 import type { UserInfo, QualityLevel } from "../types";
 
 interface VideoPlayerProps {
@@ -28,14 +38,24 @@ export function VideoPlayer({
   const hlsRef = useRef<Hls | null>(null);
   
   const [isPaused, setIsPaused] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(getInitialMuted);
+  const [volume, setVolume] = useState(getInitialVolume);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
-  const [currentQuality, setCurrentQuality] = useState<number>(-1);
+  const [currentQuality, setCurrentQuality] = useState<number>(AUTO_QUALITY);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
 
-  // Load stream when channel changes
+  // Refs so the async stream-load effect reads the latest preferences
+  // without making them deps (which would re-create the HLS instance).
+  const volumeRef = useRef(volume);
+  const isMutedRef = useRef(isMuted);
+  const preferredQualityHeightRef = useRef<number | null>(null);
+  if (preferredQualityHeightRef.current === null) {
+    preferredQualityHeightRef.current = getInitialPreferredQualityHeight();
+  }
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
   useEffect(() => {
     if (!channel || !userInfo?.stream) return;
     let cancelled = false;
@@ -89,12 +109,25 @@ export function VideoPlayer({
           }));
           levels.sort((a, b) => b.height - a.height);
           setQualities(levels);
-          setCurrentQuality(-1);
           debug(`[VideoPlayer] Available qualities: ${JSON.stringify(levels)}`);
 
+          const preferredHeight = preferredQualityHeightRef.current;
+          let initialLevelId: number = AUTO_QUALITY;
+          if (preferredHeight !== null && preferredHeight > 0) {
+            const match = levels.find(l => l.height === preferredHeight);
+            if (match) {
+              initialLevelId = match.id;
+              hls.currentLevel = match.id;
+              debug(`[VideoPlayer] Applied preferred quality: ${match.label}`);
+            }
+          }
+          setCurrentQuality(initialLevelId);
+
           if (videoRef.current) {
-            videoRef.current.muted = false;
+            videoRef.current.volume = volumeRef.current;
+            videoRef.current.muted = isMutedRef.current;
             videoRef.current.play().catch(() => {
+              // Browser blocked autoplay with sound — fall back to muted.
               if (videoRef.current) {
                 videoRef.current.muted = true;
                 videoRef.current.play().catch(e => logError(`[VideoPlayer] Playback failed: ${e}`));
@@ -131,13 +164,17 @@ export function VideoPlayer({
     const hls = hlsRef.current;
     if (!hls) return;
 
-    if (levelId === -1) {
-      hls.currentLevel = -1;
+    if (levelId === AUTO_QUALITY) {
+      hls.currentLevel = AUTO_QUALITY;
+      preferredQualityHeightRef.current = AUTO_QUALITY;
+      persistPreferredQualityHeight(AUTO_QUALITY);
       debug("[VideoPlayer] Quality set to auto");
     } else {
       const quality = qualities.find(q => q.id === levelId);
       if (quality) {
         hls.currentLevel = levelId;
+        preferredQualityHeightRef.current = quality.height;
+        persistPreferredQualityHeight(quality.height);
         debug(`[VideoPlayer] Quality set to: ${quality.label}`);
       }
     }
@@ -156,20 +193,24 @@ export function VideoPlayer({
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
     if (video) {
-      video.muted = !video.muted;
+      const next = !video.muted;
+      video.muted = next;
+      persistMuted(next);
     }
   }, []);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
     const video = videoRef.current;
-    if (video) {
-      video.volume = newVolume;
-      video.muted = newVolume === 0;
+    if (!video) return;
+    video.volume = newVolume;
+    const muted = newVolume === 0;
+    video.muted = muted;
+    persistVolume(newVolume);
+    if (muted !== isMutedRef.current) {
+      persistMuted(muted);
     }
   }, []);
 
-  // Show offline screen if channel exists but is not live
-  // Only show offline if we have user info and confirmed no stream
   if (userInfo && !userInfo.stream && !isLoadingStream) {
     return (
       <div className="flex-1 relative bg-black">
@@ -297,7 +338,7 @@ export function VideoPlayer({
             >
               <Settings className="w-5 h-5 text-white" />
               <span className="text-white text-xs">
-                {currentQuality === -1 ? "Auto" : qualities.find(q => q.id === currentQuality)?.label || "Auto"}
+                {currentQuality === AUTO_QUALITY ? "Auto" : qualities.find(q => q.id === currentQuality)?.label || "Auto"}
               </span>
             </button>
 
@@ -310,14 +351,14 @@ export function VideoPlayer({
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <button
-                      onClick={() => changeQuality(-1)}
+                      onClick={() => changeQuality(AUTO_QUALITY)}
                       className={cn(
                         "w-full px-3 py-2 text-left text-sm hover:bg-hover flex items-center justify-between",
-                        currentQuality === -1 && "text-twitch"
+                        currentQuality === AUTO_QUALITY && "text-twitch"
                       )}
                     >
                       Auto
-                      {currentQuality === -1 && <span className="text-xs">✓</span>}
+                      {currentQuality === AUTO_QUALITY && <span className="text-xs">✓</span>}
                     </button>
                     {qualities.map((q) => (
                       <button
