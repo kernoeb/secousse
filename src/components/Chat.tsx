@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { PanelRight, PanelLeft, User, Settings, Send } from "lucide-react";
 import { cn, twitchEmoteUrl } from "../lib/utils";
 import type { ChatMessage, TwitchBadge } from "../types";
@@ -157,7 +157,7 @@ interface ChatMessageViewProps {
   channelBadges: TwitchBadge[];
 }
 
-function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessageViewProps) {
+const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessageViewProps) {
   const badgeUrls = useMemo(() => {
     if (!msg.badges) return [];
     return msg.badges
@@ -180,7 +180,7 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
       .sort((a, b) => a.start - b.start);
 
     const emoteImg = (key: string, src: string, alt: string) => (
-      <img key={key} src={src} alt={alt} className="inline-block h-6 mx-0.5 align-middle" />
+      <img key={key} src={src} alt={alt} loading="lazy" decoding="async" className="inline-block h-6 mx-0.5 align-middle" />
     );
 
     // split on whitespace runs and keep them as separators so output preserves spacing
@@ -214,7 +214,7 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
       </span>
       <span className="inline-flex gap-0.5 mr-1 align-middle">
         {badgeUrls.map((url, i) => (
-          <img key={i} src={url as string} className="w-4 h-4 rounded-sm" />
+          <img key={i} src={url as string} loading="lazy" decoding="async" className="w-4 h-4 rounded-sm" />
         ))}
       </span>
       <span
@@ -226,4 +226,4 @@ function ChatMessageView({ msg, emotes, globalBadges, channelBadges }: ChatMessa
       <span>{parts}</span>
     </div>
   );
-}
+});
