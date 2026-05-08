@@ -179,8 +179,11 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadge
       .filter(r => r.start <= r.end && r.end < codepoints.length)
       .sort((a, b) => a.start - b.start);
 
+    // width/height attrs reserve a 1:1 layout box before load — without them the
+    // image is 0 wide until fetched, which re-wraps the surrounding text and
+    // shifts the message vertically after auto-scroll has already fired.
     const emoteImg = (key: string, src: string, alt: string) => (
-      <img key={key} src={src} alt={alt} loading="lazy" decoding="async" className="inline-block h-6 mx-0.5 align-middle" />
+      <img key={key} src={src} alt={alt} width={28} height={28} loading="lazy" decoding="async" className="inline-block h-6 mx-0.5 align-middle" />
     );
 
     // split on whitespace runs and keep them as separators so output preserves spacing
