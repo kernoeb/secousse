@@ -88,8 +88,13 @@ export function VideoPlayer({
           abrEwmaDefaultEstimate: 5_000_000,
         });
 
+        let errorLogCount = 0;
         hls.on(Hls.Events.ERROR, (_event, data) => {
-          info(`[VideoPlayer] HLS error type=${data.type} details=${data.details} fatal=${data.fatal}`);
+          if (errorLogCount < 6) {
+            info(`[VideoPlayer] HLS error type=${data.type} details=${data.details} fatal=${data.fatal}`);
+            errorLogCount++;
+            if (errorLogCount === 6) info(`[VideoPlayer] (further HLS errors suppressed)`);
+          }
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
