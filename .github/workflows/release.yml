@@ -11,7 +11,29 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
+  # Serializes the draft-release creation so the parallel build matrix below
+  # uploads to a single existing release instead of racing to create their
+  # own (which produced duplicate drafts in v0.1.2).
+  create-release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+    steps:
+      - id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Secousse ${{ github.ref_name }}
+          body: See the assets to download and install this version.
+          draft: true
+          prerelease: false
+
   build:
+    needs: create-release
+    if: ${{ !cancelled() && (github.ref_type != 'tag' || needs.create-release.result == 'success') }}
     permissions:
       contents: write
     strategy:
@@ -69,11 +91,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Secousse {0}', github.ref_name) || '' }}
-          releaseBody: ${{ github.ref_type == 'tag' && 'See the assets to download and install this version.' || '' }}
-          releaseDraft: true
-          prerelease: false
+          # When a release_id is passed, tauri-action skips its own find-or-
+          # create step and uploads only to this existing draft. Empty for
+          # non-tag dry-run builds (no release published).
+          releaseId: ${{ github.ref_type == 'tag' && needs.create-release.outputs.release_id || '' }}
           args: ${{ matrix.args }}
 
       - name: Upload artifacts (dry-run builds)
