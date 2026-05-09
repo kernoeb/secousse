@@ -437,6 +437,11 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .clear_targets()
             .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout))
+            // Production builds have no console; without a file target the
+            // app emits zero diagnostics on disk. LogDir resolves to the
+            // platform's app log dir (macOS: ~/Library/Logs/<id>, Windows:
+            // %LOCALAPPDATA%\<id>\logs, Linux: ~/.local/share/<id>/logs).
+            .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: None }))
             .build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
