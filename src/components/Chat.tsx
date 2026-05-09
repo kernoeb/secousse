@@ -6,9 +6,6 @@ import type { ChatMessage, TwitchBadge } from "../types";
 
 const VLIST_STYLE: React.CSSProperties = { padding: 12 };
 
-// Sub-pixel gap below which the pin closes via direct scrollTo. Larger gaps
-// indicate a real user scroll-up and must not be overridden.
-const PIN_GAP_SLOP_PX = 8;
 // Tolerance for distinguishing programmatic vs user scroll. Set wide enough
 // to absorb virtua's offset jitter when it re-measures items during layout
 // shifts (typical few-pixel adjustments after image-load reflow), so the user
@@ -76,11 +73,20 @@ export function Chat({
     }
   };
 
-  // Two-pass scroll: virtua measures items via ResizeObserver one frame after
-  // they mount, so the first scrollToIndex uses an estimated/cached size for
-  // a fresh row. The second pass on the next frame lands flush with the real
-  // bottom once the row's actual height is known. Same logic catches late
-  // emote-image loads that grow the row after the first pin.
+  // scrollToIndex can land short of the true bottom in two cases:
+  // - per-item size-cache rounding (1-2px clip on the last text line)
+  // - virtua aligning to last-item.bottom rather than scroll-area.bottom,
+  //   eating the VList's padding-bottom.
+  // Caller must have already gated on isFollowingRef.
+  const closeBottomGap = useCallback(() => {
+    const h = vlistRef.current;
+    if (!h) return;
+    const gap = h.scrollSize - h.scrollOffset - h.viewportSize;
+    if (gap > 0) h.scrollTo(h.scrollSize);
+  }, []);
+
+  // rAF coalesces N pin requests per frame (hot when many emote <img> onLoad
+  // fire near-simultaneously alongside the messages-length effect).
   const pinRafRef = useRef<number | null>(null);
   const pinToLast = useCallback(() => {
     if (!isFollowingRef.current) return;
@@ -90,13 +96,14 @@ export function Chat({
       const h = vlistRef.current;
       if (!h || !isFollowingRef.current || messagesLenRef.current === 0) return;
       h.scrollToIndex(messagesLenRef.current - 1, { align: "end" });
-      // Per-item size-cache rounding can leave scrollToIndex 1-2px short of
-      // the absolute bottom and clip the last text line. Close that gap via
-      // direct scrollTo, capped so a real user-up-scroll isn't overridden.
-      const gap = h.scrollSize - h.scrollOffset - h.viewportSize;
-      if (gap > 0 && gap < PIN_GAP_SLOP_PX) h.scrollTo(h.scrollSize);
+      closeBottomGap();
     });
-  }, []);
+  }, [closeBottomGap]);
+
+  const onListScrollEnd = useCallback(() => {
+    if (!isFollowingRef.current) return;
+    closeBottomGap();
+  }, [closeBottomGap]);
 
   useEffect(() => {
     pinToLast();
@@ -155,6 +162,7 @@ export function Chat({
         <VList
           ref={vlistRef}
           onScroll={handleListScroll}
+          onScrollEnd={onListScrollEnd}
           className="flex-1 custom-scrollbar"
           style={VLIST_STYLE}
         >
