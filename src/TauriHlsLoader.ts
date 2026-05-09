@@ -72,13 +72,9 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        const interestingHeaders = ['server', 'x-served-by', 'cf-ray', 'set-cookie', 'content-type', 'x-cache', 'twitch-edge-id'];
-        const headerDump = interestingHeaders
-          .map((h) => `${h}=${res.headers.get(h) ?? '-'}`)
-          .join(' ');
-        info(`[HlsLoader] HTTP ${res.status} on ${urlTail} | ${headerDump} | body=${body.slice(0, 100)}`);
+        info(`[HlsLoader] HTTP ${res.status} on ${urlTail}: ${body.slice(0, 80)}`);
         this.callbacks?.onError(
-          { code: res.status, text: `HTTP ${res.status}: ${body.slice(0, 80)}` },
+          { code: res.status, text: `HTTP ${res.status}` },
           this.context,
           undefined,
           this.stats,
@@ -86,18 +82,11 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
         return;
       }
 
-      // Decode via TextDecoder rather than res.text() so we control the
-      // encoding identically across platforms (some Tauri http plugin paths
-      // returned latin1-decoded text on Windows under earlier diagnoses).
+      // Decode via TextDecoder rather than res.text() so the encoding is
+      // controlled identically across platforms.
       const buf = await res.arrayBuffer();
       const data: string | ArrayBuffer = isText ? new TextDecoder('utf-8').decode(buf) : buf;
       const size = isText ? (data as string).length : buf.byteLength;
-
-      if (isText) {
-        const ctxType = (this.context as { type?: string }).type ?? 'unknown';
-        const head = (data as string).slice(0, 80).replace(/\n/g, ' \\n ');
-        info(`[HlsLoader] ${ctxType} ${size}B head="${head}"`);
-      }
 
       const now = performance.now();
       this.stats.loading.first ||= now;

@@ -442,6 +442,11 @@ pub fn run() {
             // platform's app log dir (macOS: ~/Library/Logs/<id>, Windows:
             // %LOCALAPPDATA%\<id>\logs, Linux: ~/.local/share/<id>/logs).
             .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: None }))
+            // Cap log volume: rotate at 5 MB and keep only the previous
+            // archive — long-running sessions otherwise grow the file
+            // unboundedly (HLS variant playlists tick every few seconds).
+            .max_file_size(5 * 1024 * 1024)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
             .build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
