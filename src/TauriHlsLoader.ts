@@ -8,9 +8,12 @@ import {
 import { fetch } from '@tauri-apps/plugin-http';
 import { info } from '@tauri-apps/plugin-log';
 
-// Twitch's CDN edges sometimes 403 requests without these set; matches what
-// real twitch.tv sends. plugin-http on Windows doesn't add them by default.
+// Twitch's CDN edges 403 requests with the default reqwest User-Agent
+// (observed on Windows v0.1.2: master playlist fetches OK but every
+// variant returns 403). Matching what twitch.tv's web player sends.
 const HLS_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   Origin: 'https://www.twitch.tv',
   Referer: 'https://www.twitch.tv/',
 };
@@ -69,7 +72,11 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        info(`[HlsLoader] HTTP ${res.status} on ${urlTail}: ${body.slice(0, 120)}`);
+        const interestingHeaders = ['server', 'x-served-by', 'cf-ray', 'set-cookie', 'content-type', 'x-cache', 'twitch-edge-id'];
+        const headerDump = interestingHeaders
+          .map((h) => `${h}=${res.headers.get(h) ?? '-'}`)
+          .join(' ');
+        info(`[HlsLoader] HTTP ${res.status} on ${urlTail} | ${headerDump} | body=${body.slice(0, 100)}`);
         this.callbacks?.onError(
           { code: res.status, text: `HTTP ${res.status}: ${body.slice(0, 80)}` },
           this.context,
