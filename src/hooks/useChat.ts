@@ -6,22 +6,13 @@ import type { ChatMessage } from "../types";
 
 interface UseChatReturn {
   messages: ChatMessage[];
-  isAtBottom: boolean;
   isConnected: boolean;
-  chatContainerRef: React.RefObject<HTMLDivElement | null>;
-  chatEndRef: React.RefObject<HTMLDivElement | null>;
   sendMessage: (message: string) => Promise<void>;
-  handleScroll: () => void;
-  scrollToBottom: () => void;
-  onMessageImageLoad: () => void;
 }
 
 export function useChat(channel: string | null, isLoggedIn: boolean): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isAtBottom, setIsAtBottom] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const currentChannelRef = useRef<string | null>(null);
   const connectingRef = useRef<string | null>(null);
   const messageListenerRef = useRef<(() => void) | null>(null);
@@ -29,6 +20,10 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
 
   // Track seen message IDs to prevent duplicates
   const seenIdsRef = useRef<Set<string>>(new Set());
+
+  // Monotonic counter for messages whose IRC `id` tag is missing (rare, but
+  // would otherwise produce duplicate React keys and force a full reconcile).
+  const nextKeyRef = useRef(0);
 
   // Connect to chat when channel changes
   useEffect(() => {
@@ -40,7 +35,7 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       seenIdsRef.current.clear();
       return;
     }
-    
+
     // Guard against duplicate connections
     if (connectingRef.current === channel) {
       return;
@@ -52,7 +47,6 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     currentChannelRef.current = channel;
     setMessages([]);
     seenIdsRef.current.clear();
-    setIsAtBottom(true);
 
     invoke("connect_to_chat", { channel })
       .then(() => {
@@ -67,26 +61,22 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
 
   // Listen for chat messages
   useEffect(() => {
-    // Prevent duplicate listener registration
     if (messageListenerRef.current) return;
-    
+
     const setupListener = async () => {
       const unlisten = await listen<ChatMessage>("chat-message", (event) => {
         const newMsg = event.payload;
 
-        // Only accept messages from the current channel
         if (newMsg.channel !== currentChannelRef.current) {
           debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
           return;
         }
 
-        // Skip if we've already seen this message ID
         if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
           debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
           return;
         }
 
-        // Add to seen IDs (keep last 500 to prevent memory growth)
         if (newMsg.id) {
           seenIdsRef.current.add(newMsg.id);
           if (seenIdsRef.current.size > 500) {
@@ -95,13 +85,14 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
           }
         }
 
-        setMessages((prev) => [...prev, { ...newMsg, timestamp: Date.now() }].slice(-200));
+        const _renderKey = newMsg.id || `local-${nextKeyRef.current++}`;
+        setMessages((prev) => [...prev, { ...newMsg, _renderKey, timestamp: Date.now() }].slice(-300));
       });
       messageListenerRef.current = unlisten;
     };
-    
+
     setupListener();
-    
+
     return () => {
       if (messageListenerRef.current) {
         messageListenerRef.current();
@@ -112,9 +103,8 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
 
   // Handle chat disconnection and auto-reconnect
   useEffect(() => {
-    // Prevent duplicate listener registration
     if (disconnectListenerRef.current) return;
-    
+
     const setupListener = async () => {
       const unlisten = await listen<string>("chat-disconnected", async (event) => {
         const disconnectedChannel = event.payload;
@@ -138,9 +128,9 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       });
       disconnectListenerRef.current = unlisten;
     };
-    
+
     setupListener();
-    
+
     return () => {
       if (disconnectListenerRef.current) {
         disconnectListenerRef.current();
@@ -148,56 +138,6 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       }
     };
   }, [channel]);
-
-  // Track if user manually scrolled
-  const userScrolledRef = useRef(false);
-  const isAtBottomRef = useRef(true);
-  useEffect(() => { isAtBottomRef.current = isAtBottom; }, [isAtBottom]);
-
-  // Coalesces N scroll calls per frame into one. Hot at chat open, where
-  // hundreds of <img onLoad> fire near-simultaneously.
-  const scrollRafRef = useRef<number | null>(null);
-  const pinToBottomIfFollowing = useCallback(() => {
-    if (!isAtBottomRef.current || userScrolledRef.current) return;
-    if (scrollRafRef.current != null) return;
-    scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      chatEndRef.current?.scrollIntoView({ behavior: "auto" });
-    });
-  }, []);
-
-  useEffect(() => {
-    pinToBottomIfFollowing();
-  }, [messages, isAtBottom, pinToBottomIfFollowing]);
-
-  // Re-pin after each emote image loads — non-square emotes (e.g. Kappa 25×28)
-  // and 7TV wide animated emotes shift layout *after* the [messages] effect
-  // already scrolled, leaving the newest message clipped below the viewport.
-  const onMessageImageLoad = pinToBottomIfFollowing;
-
-  const handleScroll = useCallback(() => {
-    const container = chatContainerRef.current;
-    if (!container) return;
-
-    const threshold = 100;
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isNearBottom = distanceFromBottom < threshold;
-    
-    // If user scrolled away from bottom, mark as manually scrolled
-    if (!isNearBottom) {
-      userScrolledRef.current = true;
-    } else {
-      userScrolledRef.current = false;
-    }
-    
-    setIsAtBottom(isNearBottom);
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    userScrolledRef.current = false;
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    setIsAtBottom(true);
-  }, []);
 
   const sendMessage = useCallback(async (message: string) => {
     if (!message.trim() || !isLoggedIn || !isConnected) return;
@@ -211,13 +151,7 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
 
   return {
     messages,
-    isAtBottom,
     isConnected,
-    chatContainerRef,
-    chatEndRef,
     sendMessage,
-    handleScroll,
-    scrollToBottom,
-    onMessageImageLoad,
   };
 }

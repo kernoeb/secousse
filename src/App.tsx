@@ -5,6 +5,7 @@ import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 import { useAuth, useChat, useEmotes, useSearch, useTopStreams } from "./hooks";
 import { Navbar, Sidebar, VideoPlayer, Chat, StreamInfo, BrowseGrid } from "./components";
 import { getInitialChannel, getInitialActiveTab, persistChannel, persistActiveTab, getInitialSidebarOpen, getInitialChatOpen, persistSidebarOpen, persistChatOpen } from "./lib/utils";
+import { startSpam, stopSpam } from "./lib/spamSim";
 import type { UserInfo, ActiveTab, GetUserInfoResponse } from "./types";
 
 export default function App() {
@@ -57,6 +58,27 @@ export default function App() {
 
   // Search hook with channel selection callback
   const search = useSearch(setChannel);
+
+  // Dev-only chat spam simulator: __spam.start({ rate, emotesPerMsg, durationSec }) / __spam.stop()
+  // Auto-start when VITE_AUTOSPAM is set (JSON opts), once channel + emotes are ready.
+  const autospamFiredRef = useRef(false);
+  useEffect(() => {
+    if (!import.meta.env.DEV || !channel) return;
+    window.__spam = {
+      start: (opts = {}) => startSpam(channel, Array.from(allEmotes.keys()), opts),
+      stop: stopSpam,
+    };
+
+    const autospam = import.meta.env.VITE_AUTOSPAM as string | undefined;
+    if (autospam && !autospamFiredRef.current && allEmotes.size > 0) {
+      autospamFiredRef.current = true;
+      const opts = JSON.parse(autospam);
+      info(`[App] VITE_AUTOSPAM detected, starting in 3s with ${JSON.stringify(opts)}`);
+      setTimeout(() => startSpam(channel, Array.from(allEmotes.keys()), opts), 3000);
+    }
+
+    return () => stopSpam();
+  }, [channel, allEmotes]);
 
   // Initialize app
   useEffect(() => {
@@ -332,13 +354,7 @@ export default function App() {
           channelBadges={channelBadges}
           isLoggedIn={isLoggedIn}
           isConnected={chat.isConnected}
-          isAtBottom={chat.isAtBottom}
-          chatContainerRef={chat.chatContainerRef}
-          chatEndRef={chat.chatEndRef}
-          onScroll={chat.handleScroll}
-          onScrollToBottom={chat.scrollToBottom}
           onSendMessage={chat.sendMessage}
-          onMessageImageLoad={chat.onMessageImageLoad}
         />
       </div>
     </div>

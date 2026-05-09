@@ -92,6 +92,8 @@ export interface ChatMessage {
   emotes: ChatEmoteRange[];
   timestamp: number;
   channel: string;
+  /** Client-side stable key for React. Falls back to a monotonic counter when Twitch's `id` tag is missing. */
+  _renderKey?: string;
 }
 
 // ============================================

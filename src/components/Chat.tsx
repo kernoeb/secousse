@@ -1,7 +1,21 @@
-import { useState, useMemo, memo } from "react";
+import { useState, useMemo, memo, useRef, useEffect, useCallback } from "react";
 import { PanelRight, PanelLeft, User, Settings, Send } from "lucide-react";
+import { VList, type VListHandle } from "virtua";
 import { cn, twitchEmoteUrl } from "../lib/utils";
 import type { ChatMessage, TwitchBadge } from "../types";
+
+const VLIST_STYLE: React.CSSProperties = { padding: 12 };
+
+// Sub-pixel gap below which the pin closes via direct scrollTo. Larger gaps
+// indicate a real user scroll-up and must not be overridden.
+const PIN_GAP_SLOP_PX = 8;
+// Tolerance for distinguishing programmatic vs user scroll. Set wide enough
+// to absorb virtua's offset jitter when it re-measures items during layout
+// shifts (typical few-pixel adjustments after image-load reflow), so the user
+// only "unfollows" on a real scroll-up, not on a measurement artifact.
+const SCROLL_NOISE_PX = 16;
+// Distance from bottom past which a user up-scroll is considered intentional.
+const UNFOLLOW_THRESHOLD_PX = 100;
 
 interface ChatProps {
   isOpen: boolean;
@@ -12,13 +26,7 @@ interface ChatProps {
   channelBadges: TwitchBadge[];
   isLoggedIn: boolean;
   isConnected: boolean;
-  isAtBottom: boolean;
-  chatContainerRef: React.RefObject<HTMLDivElement | null>;
-  chatEndRef: React.RefObject<HTMLDivElement | null>;
-  onScroll: () => void;
-  onScrollToBottom: () => void;
   onSendMessage: (message: string) => void;
-  onMessageImageLoad: () => void;
 }
 
 export function Chat({
@@ -30,15 +38,26 @@ export function Chat({
   channelBadges,
   isLoggedIn,
   isConnected,
-  isAtBottom,
-  chatContainerRef,
-  chatEndRef,
-  onScroll,
-  onScrollToBottom,
   onSendMessage,
-  onMessageImageLoad,
 }: ChatProps) {
   const [chatInput, setChatInput] = useState("");
+  // Tracks user *intent* to follow the bottom, not pixel proximity. A layout
+  // shift (emote loads, message grows) doesn't disengage — only an active
+  // up-scroll does. The ref keeps `pinToLast` stable across renders so it
+  // doesn't invalidate ChatMessageView's `parts` useMemo on every message.
+  const [isFollowing, setIsFollowing] = useState(true);
+  const isFollowingRef = useRef(true);
+  const vlistRef = useRef<VListHandle>(null);
+  const messagesLenRef = useRef(0);
+  const lastScrollOffsetRef = useRef(0);
+  messagesLenRef.current = messages.length;
+
+  const badgeIndex = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const b of globalBadges) map.set(`${b.setID}/${b.version}`, b.imageURL);
+    for (const b of channelBadges) map.set(`${b.setID}/${b.version}`, b.imageURL);
+    return map;
+  }, [globalBadges, channelBadges]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -56,6 +75,60 @@ export function Chat({
       setChatInput("");
     }
   };
+
+  // Two-pass scroll: virtua measures items via ResizeObserver one frame after
+  // they mount, so the first scrollToIndex uses an estimated/cached size for
+  // a fresh row. The second pass on the next frame lands flush with the real
+  // bottom once the row's actual height is known. Same logic catches late
+  // emote-image loads that grow the row after the first pin.
+  const pinRafRef = useRef<number | null>(null);
+  const pinToLast = useCallback(() => {
+    if (!isFollowingRef.current) return;
+    if (pinRafRef.current !== null) return;
+    pinRafRef.current = requestAnimationFrame(() => {
+      pinRafRef.current = null;
+      const h = vlistRef.current;
+      if (!h || !isFollowingRef.current || messagesLenRef.current === 0) return;
+      h.scrollToIndex(messagesLenRef.current - 1, { align: "end" });
+      // Per-item size-cache rounding can leave scrollToIndex 1-2px short of
+      // the absolute bottom and clip the last text line. Close that gap via
+      // direct scrollTo, capped so a real user-up-scroll isn't overridden.
+      const gap = h.scrollSize - h.scrollOffset - h.viewportSize;
+      if (gap > 0 && gap < PIN_GAP_SLOP_PX) h.scrollTo(h.scrollSize);
+    });
+  }, []);
+
+  useEffect(() => {
+    pinToLast();
+  }, [messages.length, pinToLast]);
+
+  useEffect(() => () => {
+    if (pinRafRef.current !== null) cancelAnimationFrame(pinRafRef.current);
+  }, []);
+
+  const handleListScroll = useCallback(() => {
+    const h = vlistRef.current;
+    if (!h) return;
+    const offset = h.scrollOffset;
+    const distanceFromBottom = h.scrollSize - offset - h.viewportSize;
+    const userScrolledUp = offset < lastScrollOffsetRef.current - SCROLL_NOISE_PX;
+    lastScrollOffsetRef.current = offset;
+
+    if (isFollowingRef.current && userScrolledUp && distanceFromBottom > UNFOLLOW_THRESHOLD_PX) {
+      isFollowingRef.current = false;
+      setIsFollowing(false);
+    } else if (!isFollowingRef.current && distanceFromBottom < SCROLL_NOISE_PX) {
+      isFollowingRef.current = true;
+      setIsFollowing(true);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (messagesLenRef.current === 0 || isFollowingRef.current) return;
+    isFollowingRef.current = true;
+    setIsFollowing(true);
+    pinToLast();
+  }, [pinToLast]);
 
   return (
     <>
@@ -79,31 +152,26 @@ export function Chat({
           </button>
         </div>
 
-        <div
-          ref={chatContainerRef}
-          onScroll={onScroll}
-          className="flex-1 overflow-y-auto custom-scrollbar flex flex-col"
+        <VList
+          ref={vlistRef}
+          onScroll={handleListScroll}
+          className="flex-1 custom-scrollbar"
+          style={VLIST_STYLE}
         >
-          {/* mt-auto pins messages to the bottom when they don't fill the viewport */}
-          <div className="mt-auto p-3">
-            {messages.map((m, i) => (
-              <ChatMessageView
-                key={i}
-                msg={m}
-                emotes={emotes}
-                globalBadges={globalBadges}
-                channelBadges={channelBadges}
-                onImageLoad={onMessageImageLoad}
-              />
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-        </div>
+          {messages.map((m) => (
+            <ChatMessageView
+              key={m._renderKey ?? m.id}
+              msg={m}
+              emotes={emotes}
+              badgeIndex={badgeIndex}
+              onImageLoad={pinToLast}
+            />
+          ))}
+        </VList>
 
-        {/* Scroll to bottom button */}
-        {!isAtBottom && (
+        {!isFollowing && (
           <button
-            onClick={onScrollToBottom}
+            onClick={scrollToBottom}
             className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-twitch hover:bg-twitch-dark text-white text-xs px-3 py-1.5 rounded-full shadow-lg transition-all z-10"
           >
             Scroll to bottom
@@ -142,7 +210,6 @@ export function Chat({
         </div>
       </aside>
 
-      {/* Chat toggle button when closed */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
@@ -159,26 +226,20 @@ export function Chat({
 interface ChatMessageViewProps {
   msg: ChatMessage;
   emotes: Map<string, string>;
-  globalBadges: TwitchBadge[];
-  channelBadges: TwitchBadge[];
+  badgeIndex: Map<string, string>;
   onImageLoad: () => void;
 }
 
-const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadges, channelBadges, onImageLoad }: ChatMessageViewProps) {
+const ChatMessageView = memo(function ChatMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessageViewProps) {
   const badgeUrls = useMemo(() => {
     if (!msg.badges) return [];
-    return msg.badges
-      .map(([name, version]) => {
-        const channelBadge = channelBadges?.find(b => b.setID === name && b.version === version);
-        if (channelBadge) return channelBadge.imageURL;
-
-        const globalBadge = globalBadges?.find(b => b.setID === name && b.version === version);
-        if (globalBadge) return globalBadge.imageURL;
-
-        return null;
-      })
-      .filter(Boolean);
-  }, [msg.badges, globalBadges, channelBadges]);
+    const out: string[] = [];
+    for (const [name, version] of msg.badges) {
+      const url = badgeIndex.get(`${name}/${version}`);
+      if (url) out.push(url);
+    }
+    return out;
+  }, [msg.badges, badgeIndex]);
 
   const parts = useMemo(() => {
     const codepoints = Array.from(msg.message);
@@ -186,12 +247,10 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadge
       .filter(r => r.start <= r.end && r.end < codepoints.length)
       .sort((a, b) => a.start - b.start);
 
-    // onLoad re-pins scroll after late layout shifts (see useChat#pinToBottomIfFollowing).
     const emoteImg = (key: string, src: string, alt: string) => (
       <img key={key} src={src} alt={alt} loading="lazy" decoding="async" onLoad={onImageLoad} className="inline-block h-6 mx-0.5 align-middle" />
     );
 
-    // split on whitespace runs and keep them as separators so output preserves spacing
     const renderText = (text: string, keyPrefix: string) =>
       text.split(/(\s+)/).map((word, i) => {
         if (!word) return null;
@@ -222,7 +281,7 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, globalBadge
       </span>
       <span className="inline-flex gap-0.5 mr-1 align-middle">
         {badgeUrls.map((url, i) => (
-          <img key={i} src={url as string} loading="lazy" decoding="async" className="w-4 h-4 rounded-sm" />
+          <img key={i} src={url} loading="lazy" decoding="async" className="w-4 h-4 rounded-sm" />
         ))}
       </span>
       <span
