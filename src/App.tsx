@@ -27,11 +27,9 @@ export default function App() {
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
   const chat = useChat(channel, isLoggedIn);
   
-  // Refs to prevent double initialization
   const intervalsRef = useRef<{ sidebar?: ReturnType<typeof setInterval>; stream?: ReturnType<typeof setInterval> }>({});
   const loadingChannelRef = useRef<string | null>(null);
-  const isMounted = useRef(false);
-  
+
   // Wrapper to persist channel
   const setChannel = useCallback((newChannel: string | null) => {
     persistChannel(newChannel);
@@ -91,12 +89,8 @@ export default function App() {
     setTimeout(() => {
         invoke("show_main_window");
     }, 0);
-    
-    // Delay initial load to let dependencies stabilize
-    const timer = setTimeout(() => {
-      isMounted.current = true;
-      loadTopStreams();
-    }, 100);
+
+    loadTopStreams();
 
     // ESC key to exit video fullscreen
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -107,7 +101,6 @@ export default function App() {
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      clearTimeout(timer);
     };
   }, [loadTopStreams]);
 
@@ -182,11 +175,6 @@ export default function App() {
 
   // Load channel data when channel changes
   useEffect(() => {
-    // Skip during initial mount phase
-    if (!isMounted.current) {
-      return;
-    }
-    
     if (!channel) {
       setUserInfo(null);
       loadingChannelRef.current = null;
