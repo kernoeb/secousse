@@ -35,3 +35,6 @@ src-tauri/gen/schemas
 # Environment files
 .env
 .env.*
+
+# Claude Code local state
+.claude/
