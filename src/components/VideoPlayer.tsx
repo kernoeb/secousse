@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import Hls from "hls.js";
 import { invoke } from "@tauri-apps/api/core";
-import { debug, error as logError } from "@tauri-apps/plugin-log";
+import { debug, info, error as logError } from "@tauri-apps/plugin-log";
 import { Play, Pause, Volume2, VolumeX, Settings, Maximize, Minimize, Loader2 } from "lucide-react";
 import { TauriHlsLoader } from "../TauriHlsLoader";
 import {
@@ -36,6 +36,7 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const listenersCleanupRef = useRef<(() => void) | null>(null);
   
   const [isPaused, setIsPaused] = useState(false);
   const [isMuted, setIsMuted] = useState(getInitialMuted);
@@ -59,12 +60,17 @@ export function VideoPlayer({
   useEffect(() => {
     if (!channel || !userInfo?.stream) return;
     let cancelled = false;
+    info(`[VideoPlayer] effect fired: channel=${channel} streamId=${userInfo.stream.id}`);
 
     async function loadStream() {
       try {
         const url: string = await invoke("get_stream_url", { login: channel });
+        info(`[VideoPlayer] got url len=${url.length}`);
 
-        if (cancelled || !videoRef.current) return;
+        if (cancelled || !videoRef.current) {
+          info(`[VideoPlayer] aborted before HLS init: cancelled=${cancelled} videoRef=${!!videoRef.current}`);
+          return;
+        }
 
         if (hlsRef.current) {
           hlsRef.current.destroy();
@@ -83,6 +89,7 @@ export function VideoPlayer({
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
+          info(`[VideoPlayer] HLS error type=${data.type} details=${data.details} fatal=${data.fatal}`);
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
@@ -100,8 +107,9 @@ export function VideoPlayer({
         });
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          info(`[VideoPlayer] manifest parsed: ${hls.levels.length} levels`);
           setIsLoadingStream(false);
-          
+
           const levels = hls.levels.map((level, index) => ({
             id: index,
             label: level.name || `${level.height}p${level.frameRate ? Math.round(level.frameRate) : ""}`,
@@ -126,15 +134,42 @@ export function VideoPlayer({
           if (videoRef.current) {
             videoRef.current.volume = volumeRef.current;
             videoRef.current.muted = isMutedRef.current;
-            videoRef.current.play().catch(() => {
-              // Browser blocked autoplay with sound — fall back to muted.
-              if (videoRef.current) {
-                videoRef.current.muted = true;
-                videoRef.current.play().catch(e => logError(`[VideoPlayer] Playback failed: ${e}`));
-              }
-            });
+            videoRef.current.play().then(
+              () => info(`[VideoPlayer] play() resolved (muted=${videoRef.current?.muted})`),
+              () => {
+                // Browser blocked autoplay with sound — fall back to muted.
+                if (videoRef.current) {
+                  videoRef.current.muted = true;
+                  videoRef.current.play().then(
+                    () => info(`[VideoPlayer] play() resolved on muted fallback`),
+                    e => logError(`[VideoPlayer] Playback failed: ${e}`),
+                  );
+                }
+              },
+            );
           }
         });
+
+        const video = videoRef.current;
+        const onPlaying = () => info(`[VideoPlayer] <video> playing readyState=${video.readyState}`);
+        const onWaiting = () => info(`[VideoPlayer] <video> waiting readyState=${video.readyState}`);
+        const onStalled = () => info(`[VideoPlayer] <video> stalled`);
+        const onVideoError = () => info(`[VideoPlayer] <video> error code=${video.error?.code} msg=${video.error?.message}`);
+        video.addEventListener("playing", onPlaying);
+        video.addEventListener("waiting", onWaiting);
+        video.addEventListener("stalled", onStalled);
+        video.addEventListener("error", onVideoError);
+        // Cleanup: hls destroy already in outer return, listeners are attached
+        // to a video element that React keeps mounted across pin cycles, so
+        // remove them when the loader effect re-runs.
+        const cleanupListeners = () => {
+          video.removeEventListener("playing", onPlaying);
+          video.removeEventListener("waiting", onWaiting);
+          video.removeEventListener("stalled", onStalled);
+          video.removeEventListener("error", onVideoError);
+        };
+        // Stash the cleanup so the outer effect's return can call it.
+        listenersCleanupRef.current = cleanupListeners;
 
         hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
           debug(`[VideoPlayer] Quality switched to level: ${data.level}`);
@@ -156,6 +191,10 @@ export function VideoPlayer({
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
+      }
+      if (listenersCleanupRef.current) {
+        listenersCleanupRef.current();
+        listenersCleanupRef.current = null;
       }
     };
   }, [channel, userInfo?.stream?.id, setIsLoadingStream]);
