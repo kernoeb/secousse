@@ -17,7 +17,7 @@ An open-source streaming client for Twitch, built with Tauri 2, React, TypeScrip
 
 ## Tech Stack
 
-- **Frontend**: React 19, TypeScript, Tailwind CSS
+- **Frontend**: React 19, TypeScript, Tailwind CSS v4, Vite
 - **Backend**: Rust with Tauri 2
 - **Video**: HLS.js with custom Tauri loader for CORS bypass
 - **Chat**: IRC WebSocket connection
@@ -49,12 +49,15 @@ bun run tauri build
 ```
 secousse/
 ├── src/                    # React frontend
-│   ├── App.tsx            # Main application component
+│   ├── App.tsx            # Main application component (state orchestrator)
+│   ├── components/        # Navbar, Sidebar, VideoPlayer, Chat, StreamInfo, BrowseGrid
+│   ├── hooks/             # useAuth, useChat, useEmotes, useSearch, useTopStreams
+│   ├── lib/               # utils (persistence, formatters), spamSim (dev tool)
 │   ├── TauriHlsLoader.ts  # Custom HLS loader for Tauri
 │   └── types.ts           # TypeScript type definitions
 ├── src-tauri/             # Rust backend
 │   └── src/
-│       ├── lib.rs         # Tauri commands and app setup
+│       ├── lib.rs         # Tauri commands, OAuth callback server, app setup
 │       ├── twitch.rs      # Twitch API client (GQL + Helix)
 │       ├── chat.rs        # IRC WebSocket chat handler
 │       └── emotes.rs      # 7TV/BTTV/FFZ emote fetching
