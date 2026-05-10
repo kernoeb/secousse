@@ -3,6 +3,7 @@ import { PanelRight, PanelLeft, User, Settings, Send } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
 import { cn, twitchEmoteUrl } from "../lib/utils";
 import type { ChatMessage, TwitchBadge } from "../types";
+import { EmoteImg } from "./EmoteImg";
 
 const VLIST_STYLE: React.CSSProperties = { padding: 12 };
 
@@ -256,7 +257,7 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, badgeIndex,
       .sort((a, b) => a.start - b.start);
 
     const emoteImg = (key: string, src: string, alt: string) => (
-      <img key={key} src={src} alt={alt} loading="lazy" decoding="async" onLoad={onImageLoad} className="inline-block h-6 mx-0.5 align-middle" />
+      <EmoteImg key={key} url={src} alt={alt} onReady={onImageLoad} />
     );
 
     const renderText = (text: string, keyPrefix: string) =>

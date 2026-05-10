@@ -60,10 +60,12 @@ export default function App() {
   // Dev-only chat spam simulator: __spam.start({ rate, emotesPerMsg, durationSec }) / __spam.stop()
   // Auto-start when VITE_AUTOSPAM is set (JSON opts), once channel + emotes are ready.
   const autospamFiredRef = useRef(false);
+  const allEmotesRef = useRef(allEmotes);
+  allEmotesRef.current = allEmotes;
   useEffect(() => {
     if (!import.meta.env.DEV || !channel) return;
     window.__spam = {
-      start: (opts = {}) => startSpam(channel, Array.from(allEmotes.keys()), opts),
+      start: (opts = {}) => startSpam(channel, Array.from(allEmotesRef.current.keys()), opts),
       stop: stopSpam,
     };
 
@@ -71,8 +73,15 @@ export default function App() {
     if (autospam && !autospamFiredRef.current && allEmotes.size > 0) {
       autospamFiredRef.current = true;
       const opts = JSON.parse(autospam);
-      info(`[App] VITE_AUTOSPAM detected, starting in 3s with ${JSON.stringify(opts)}`);
-      setTimeout(() => startSpam(channel, Array.from(allEmotes.keys()), opts), 3000);
+      info(`[App] VITE_AUTOSPAM detected, starting in 5s with ${JSON.stringify(opts)}`);
+      setTimeout(() => {
+        const map = allEmotesRef.current;
+        const names = Array.from(map.keys());
+        const urls = Array.from(map.values());
+        const animated = urls.filter((u) => /\/animated\/|(\.webp|\.gif)(\?|$)/i.test(u) || /7tv\.app|betterttv\.net|frankerfacez\.com/i.test(u)).length;
+        info(`[App] starting spam: pool=${names.length} emotes (likely-animated≈${animated})`);
+        startSpam(channel, names, opts);
+      }, 5000);
     }
 
     return () => stopSpam();

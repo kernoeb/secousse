@@ -40,6 +40,7 @@ tauri-plugin-log = "2.8.0"
 log = "0.4.29"
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 window-vibrancy = "0.7"
+image = { version = "0.25", default-features = false, features = ["webp", "gif", "png", "jpeg"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"

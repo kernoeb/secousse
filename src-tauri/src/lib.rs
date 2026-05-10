@@ -1,6 +1,7 @@
 pub mod twitch;
 pub mod chat;
 pub mod emotes;
+pub mod emote_decoder;
 
 use log::{info, debug, error};
 use tauri::{State, Window, Manager, Emitter};
@@ -8,7 +9,6 @@ use twitch::TwitchClient;
 use tokio::sync::Mutex;
 use emotes::Emote;
 use tauri_plugin_store::StoreExt;
-use std::sync::Arc;
 
 pub struct WatchState {
     pub channel_login: String,
@@ -19,7 +19,7 @@ pub struct WatchState {
 
 pub struct AppState {
     pub twitch_client: Mutex<TwitchClient>,
-    pub http_client: Arc<reqwest::Client>,
+    pub http_client: reqwest::Client,
     pub chat_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub chat_sender: Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
     pub watch_state: Mutex<Option<WatchState>>,
@@ -506,7 +506,7 @@ pub fn run() {
                 let _ = store.save();
             }
             
-            let http_client = Arc::new(client.client.clone());
+            let http_client = client.client.clone();
             app.manage(AppState {
                 twitch_client: Mutex::new(client),
                 http_client,
@@ -570,7 +570,8 @@ pub fn run() {
             get_twitch_global_emotes, get_twitch_channel_emotes,
             login, logout, is_logged_in, update_watch_state, set_access_token,
             search_channels, follow_channel, unfollow_channel, get_top_streams,
-            show_main_window
+            show_main_window,
+            emote_decoder::decode_emote
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
