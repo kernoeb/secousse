@@ -31,7 +31,10 @@ export function useTopStreams(): UseTopStreamsReturn {
       const data = await invoke<GetTopStreamsResponse>("get_top_streams", { limit: 30 });
       
       if (data?.streams?.edges) {
-        const streams = data.streams.edges.map((e) => e.node);
+        // Twitch occasionally returns top-streams entries with a null broadcaster
+        // (banned/suspended channels still in the cache). Drop them — every
+        // consumer dereferences `stream.broadcaster.login`.
+        const streams = data.streams.edges.map((e) => e.node).filter((s) => s?.broadcaster?.login);
         info(`[useTopStreams] Loaded ${streams.length} top streams`);
         setTopStreams(streams);
       } else {
