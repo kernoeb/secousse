@@ -1,6 +1,6 @@
 # Secousse
 
-An open-source streaming client for Twitch, built with Tauri 2, React, TypeScript, and Rust.
+An open-source alternative Twitch desktop client, built with Tauri 2, React, TypeScript, and Rust.
 
 *Secousse* is French for "twitch" (as in a sudden movement).
 
