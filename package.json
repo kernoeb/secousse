@@ -12,28 +12,28 @@
     "bump": "bun scripts/bump-version.ts"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-http": "^2.5.7",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-log": "^2.8.0",
-    "@tauri-apps/plugin-opener": "^2.5.3",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "clsx": "^2.1.1",
-    "hls.js": "^1.6.15",
-    "lucide-react": "^1.7.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "tailwind-merge": "^3.5.0",
+    "hls.js": "^1.6.16",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tailwind-merge": "^3.6.0",
     "virtua": "^0.49.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.2.2",
-    "@tauri-apps/cli": "^2.10.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@tauri-apps/cli": "^2.11.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.2.0",
-    "autoprefixer": "^10.4.27",
-    "postcss": "^8.5.8",
-    "tailwindcss": "^4.2.2",
-    "typescript": "^6.0.2",
-    "vite": "^8.0.3"
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.12"
   }
 }
