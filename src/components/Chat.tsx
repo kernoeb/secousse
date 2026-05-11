@@ -7,13 +7,9 @@ import { EmoteImg } from "./EmoteImg";
 
 const VLIST_STYLE: React.CSSProperties = { padding: 12 };
 
-// Tolerance for distinguishing programmatic vs user scroll. Set wide enough
-// to absorb virtua's offset jitter when it re-measures items during layout
-// shifts (typical few-pixel adjustments after image-load reflow), so the user
-// only "unfollows" on a real scroll-up, not on a measurement artifact.
+// Tolerance for re-engaging follow-bottom: once the user scrolls within
+// this many px of the bottom, snap back to following live messages.
 const SCROLL_NOISE_PX = 16;
-// Distance from bottom past which a user up-scroll is considered intentional.
-const UNFOLLOW_THRESHOLD_PX = 100;
 
 interface ChatProps {
   isOpen: boolean;
@@ -39,16 +35,25 @@ export function Chat({
   onSendMessage,
 }: ChatProps) {
   const [chatInput, setChatInput] = useState("");
-  // Tracks user *intent* to follow the bottom, not pixel proximity. A layout
-  // shift (emote loads, message grows) doesn't disengage — only an active
-  // up-scroll does. The ref keeps `pinToLast` stable across renders so it
-  // doesn't invalidate ChatMessageView's `parts` useMemo on every message.
   const [isFollowing, setIsFollowing] = useState(true);
   const isFollowingRef = useRef(true);
   const vlistRef = useRef<VListHandle>(null);
-  const messagesLenRef = useRef(0);
-  const lastScrollOffsetRef = useRef(0);
-  messagesLenRef.current = messages.length;
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Freeze approach: while the user is reading (not following), virtua sees
+  // a FIXED snapshot of the messages array. No items appended, none dropped
+  // → scrollOffset stays exact by construction, zero compensation needed.
+  // The live `messages` prop keeps accumulating in the background; we just
+  // don't render it. When the user lands back at the bottom we swap to live.
+  const [snapshot, setSnapshot] = useState<ChatMessage[] | null>(null);
+  const displayed = snapshot ?? messages;
+  const displayedLenRef = useRef(0);
+  displayedLenRef.current = displayed.length;
+  // Read inside the wheel handler so the listener effect can have `[]` deps.
+  // With `[messages]`, the listener would detach/re-attach on every new chat
+  // message (50–100×/s on busy streams) for no behavioral gain.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const badgeIndex = useMemo(() => {
     const map = new Map<string, string>();
@@ -95,52 +100,67 @@ export function Chat({
     pinRafRef.current = requestAnimationFrame(() => {
       pinRafRef.current = null;
       const h = vlistRef.current;
-      if (!h || !isFollowingRef.current || messagesLenRef.current === 0) return;
-      h.scrollToIndex(messagesLenRef.current - 1, { align: "end" });
+      if (!h || !isFollowingRef.current || displayedLenRef.current === 0) return;
+      h.scrollToIndex(displayedLenRef.current - 1, { align: "end" });
       closeBottomGap();
     });
   }, [closeBottomGap]);
 
   const onListScrollEnd = useCallback(() => {
-    if (!isFollowingRef.current) return;
-    closeBottomGap();
-  }, [closeBottomGap]);
+    const h = vlistRef.current;
+    if (!h) return;
+    if (isFollowingRef.current) {
+      closeBottomGap();
+      return;
+    }
+    // virtua fires onScrollEnd after scroll truly settles — momentum scroll
+    // included. Reliable signal for "user is done moving." If they ended at
+    // the bottom, swap to live and snap immediately.
+    const distanceFromBottom = h.scrollSize - h.scrollOffset - h.viewportSize;
+    if (distanceFromBottom < SCROLL_NOISE_PX) {
+      isFollowingRef.current = true;
+      setIsFollowing(true);
+      setSnapshot(null);
+      pinToLast();
+    }
+  }, [closeBottomGap, pinToLast]);
 
   useEffect(() => {
     pinToLast();
   }, [messages.length, pinToLast]);
 
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && isFollowingRef.current) {
+        isFollowingRef.current = false;
+        setIsFollowing(false);
+        setSnapshot(messagesRef.current.slice());
+      }
+    };
+    root.addEventListener("wheel", onWheel, { passive: true, capture: true });
+    return () => {
+      root.removeEventListener("wheel", onWheel, true);
+    };
+  }, []);
+
   useEffect(() => () => {
     if (pinRafRef.current !== null) cancelAnimationFrame(pinRafRef.current);
   }, []);
 
-  const handleListScroll = useCallback(() => {
-    const h = vlistRef.current;
-    if (!h) return;
-    const offset = h.scrollOffset;
-    const distanceFromBottom = h.scrollSize - offset - h.viewportSize;
-    const userScrolledUp = offset < lastScrollOffsetRef.current - SCROLL_NOISE_PX;
-    lastScrollOffsetRef.current = offset;
-
-    if (isFollowingRef.current && userScrolledUp && distanceFromBottom > UNFOLLOW_THRESHOLD_PX) {
-      isFollowingRef.current = false;
-      setIsFollowing(false);
-    } else if (!isFollowingRef.current && distanceFromBottom < SCROLL_NOISE_PX) {
-      isFollowingRef.current = true;
-      setIsFollowing(true);
-    }
-  }, []);
-
   const scrollToBottom = useCallback(() => {
-    if (messagesLenRef.current === 0 || isFollowingRef.current) return;
+    if (displayedLenRef.current === 0 || isFollowingRef.current) return;
     isFollowingRef.current = true;
     setIsFollowing(true);
+    setSnapshot(null);
     pinToLast();
   }, [pinToLast]);
 
   return (
     <>
       <aside
+        ref={containerRef}
         className={cn(
           "bg-surface border-l border-border flex flex-col z-30 transition-all duration-300 relative",
           isOpen ? "w-[340px]" : "w-0 overflow-hidden"
@@ -162,12 +182,11 @@ export function Chat({
 
         <VList
           ref={vlistRef}
-          onScroll={handleListScroll}
           onScrollEnd={onListScrollEnd}
           className="flex-1 custom-scrollbar"
           style={VLIST_STYLE}
         >
-          {messages.map((m) => (
+          {displayed.map((m) => (
             <ChatMessageView
               key={m._renderKey ?? m.id}
               msg={m}
