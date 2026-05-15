@@ -9,6 +9,8 @@ An open-source alternative Twitch desktop client, built with Tauri 2, React, Typ
 ## Features
 
 - **Live Stream Playback** - HLS video streaming with quality selection
+- **Multi-stream Grid** - Watch up to 4 streams at once in a split-screen layout; audio routes to the focused tile
+- **Pop-out Windows** - Detach any stream into an independent window with optional always-on-top
 - **Chat** - Real-time chat with emote support (Twitch, 7TV, BTTV, FFZ)
 - **Authentication** - OAuth login to access your followed channels and send chat messages
 - **Follow/Unfollow** - Manage your followed channels directly from the app
@@ -50,8 +52,9 @@ bun run tauri build
 secousse/
 ├── src/                    # React frontend
 │   ├── App.tsx            # Main application component (state orchestrator)
-│   ├── components/        # Navbar, Sidebar, VideoPlayer, Chat, StreamInfo, BrowseGrid
-│   ├── hooks/             # useAuth, useChat, useEmotes, useSearch, useTopStreams
+│   ├── PopoutApp.tsx      # Minimal shell for pop-out stream windows
+│   ├── components/        # Navbar, Sidebar, VideoPlayer, StreamGrid, Chat, StreamInfo, BrowseGrid, ChannelActionButtons
+│   ├── hooks/             # useAuth, useChat, useEmotes, useSearch, useTopStreams, useUserInfo
 │   ├── lib/               # utils (persistence, formatters), spamSim (dev tool)
 │   ├── TauriHlsLoader.ts  # Custom HLS loader for Tauri
 │   └── types.ts           # TypeScript type definitions
