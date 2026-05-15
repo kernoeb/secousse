@@ -15,8 +15,6 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   const [isConnected, setIsConnected] = useState(false);
   const currentChannelRef = useRef<string | null>(null);
   const connectingRef = useRef<string | null>(null);
-  const messageListenerRef = useRef<(() => void) | null>(null);
-  const disconnectListenerRef = useRef<(() => void) | null>(null);
 
   // Track seen message IDs to prevent duplicates
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -59,83 +57,79 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       });
   }, [channel]);
 
-  // Listen for chat messages
+  // `listen()` is async: if the cleanup fires before it resolves, the unlisten
+  // function would be lost and the listener leaks. We capture the unlisten in a
+  // local var and use a `cancelled` flag so an unresolved `listen()` is torn
+  // down as soon as it returns.
   useEffect(() => {
-    if (messageListenerRef.current) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
 
-    const setupListener = async () => {
-      const unlisten = await listen<ChatMessage>("chat-message", (event) => {
-        const newMsg = event.payload;
+    listen<ChatMessage>("chat-message", (event) => {
+      const newMsg = event.payload;
 
-        if (newMsg.channel !== currentChannelRef.current) {
-          debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
-          return;
+      if (newMsg.channel !== currentChannelRef.current) {
+        debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
+        return;
+      }
+
+      if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
+        debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
+        return;
+      }
+
+      if (newMsg.id) {
+        seenIdsRef.current.add(newMsg.id);
+        if (seenIdsRef.current.size > 500) {
+          const firstId = seenIdsRef.current.values().next().value;
+          if (firstId) seenIdsRef.current.delete(firstId);
         }
+      }
 
-        if (newMsg.id && seenIdsRef.current.has(newMsg.id)) {
-          debug(`[useChat] Skipping duplicate message ID: ${newMsg.id}`);
-          return;
-        }
-
-        if (newMsg.id) {
-          seenIdsRef.current.add(newMsg.id);
-          if (seenIdsRef.current.size > 500) {
-            const firstId = seenIdsRef.current.values().next().value;
-            if (firstId) seenIdsRef.current.delete(firstId);
-          }
-        }
-
-        const _renderKey = newMsg.id || `local-${nextKeyRef.current++}`;
-        setMessages((prev) => [...prev, { ...newMsg, _renderKey, timestamp: Date.now() }].slice(-300));
-      });
-      messageListenerRef.current = unlisten;
-    };
-
-    setupListener();
+      const _renderKey = newMsg.id || `local-${nextKeyRef.current++}`;
+      setMessages((prev) => [...prev, { ...newMsg, _renderKey, timestamp: Date.now() }].slice(-300));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
 
     return () => {
-      if (messageListenerRef.current) {
-        messageListenerRef.current();
-        messageListenerRef.current = null;
-      }
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 
-  // Handle chat disconnection and auto-reconnect
   useEffect(() => {
-    if (disconnectListenerRef.current) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
 
-    const setupListener = async () => {
-      const unlisten = await listen<string>("chat-disconnected", async (event) => {
-        const disconnectedChannel = event.payload;
-        info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
+    listen<string>("chat-disconnected", async (event) => {
+      const disconnectedChannel = event.payload;
+      info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
+
+      if (disconnectedChannel === channel) {
+        setIsConnected(false);
+        info("[useChat] Attempting to reconnect...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         if (disconnectedChannel === channel) {
-          setIsConnected(false);
-          info("[useChat] Attempting to reconnect...");
-          await new Promise(resolve => setTimeout(resolve, 2000));
-
-          if (disconnectedChannel === channel) {
-            try {
-              await invoke("connect_to_chat", { channel });
-              setIsConnected(true);
-              info("[useChat] Successfully reconnected");
-            } catch (err) {
-              logError(`[useChat] Failed to reconnect: ${err}`);
-            }
+          try {
+            await invoke("connect_to_chat", { channel });
+            setIsConnected(true);
+            info("[useChat] Successfully reconnected");
+          } catch (err) {
+            logError(`[useChat] Failed to reconnect: ${err}`);
           }
         }
-      });
-      disconnectListenerRef.current = unlisten;
-    };
-
-    setupListener();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
 
     return () => {
-      if (disconnectListenerRef.current) {
-        disconnectListenerRef.current();
-        disconnectListenerRef.current = null;
-      }
+      cancelled = true;
+      unlisten?.();
     };
   }, [channel]);
 
