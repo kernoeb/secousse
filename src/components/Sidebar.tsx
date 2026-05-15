@@ -1,5 +1,6 @@
 import { PanelLeft } from "lucide-react";
 import { cn, formatViewers } from "../lib/utils";
+import { ChannelActionButtons } from "./ChannelActionButtons";
 import type { UserInfo, TopStream, ActiveTab } from "../types";
 
 interface SidebarProps {
@@ -7,7 +8,11 @@ interface SidebarProps {
   setIsOpen: (open: boolean) => void;
   activeTab: ActiveTab;
   currentChannel: string | null;
+  gridChannels: string[];
+  canAddToGrid: boolean;
   onSelectChannel: (login: string) => void;
+  onAddToGrid: (login: string) => void;
+  onOpenPopout: (login: string) => void;
   // Following tab
   followedChannels: UserInfo[];
   isLoadingFollowed: boolean;
@@ -22,7 +27,11 @@ export function Sidebar({
   setIsOpen,
   activeTab,
   currentChannel,
+  gridChannels,
+  canAddToGrid,
   onSelectChannel,
+  onAddToGrid,
+  onOpenPopout,
   followedChannels,
   isLoadingFollowed,
   isLoggedIn,
@@ -58,7 +67,11 @@ export function Sidebar({
             isLoggedIn={isLoggedIn}
             isSidebarOpen={isOpen}
             currentChannel={currentChannel}
+            gridChannels={gridChannels}
+            canAddToGrid={canAddToGrid}
             onSelectChannel={onSelectChannel}
+            onAddToGrid={onAddToGrid}
+            onOpenPopout={onOpenPopout}
           />
         ) : (
           <TopStreamsList
@@ -66,7 +79,11 @@ export function Sidebar({
             isLoading={isLoadingBrowse}
             isSidebarOpen={isOpen}
             currentChannel={currentChannel}
+            gridChannels={gridChannels}
+            canAddToGrid={canAddToGrid}
             onSelectChannel={onSelectChannel}
+            onAddToGrid={onAddToGrid}
+            onOpenPopout={onOpenPopout}
           />
         )}
       </div>
@@ -80,7 +97,11 @@ interface FollowingListProps {
   isLoggedIn: boolean;
   isSidebarOpen: boolean;
   currentChannel: string | null;
+  gridChannels: string[];
+  canAddToGrid: boolean;
   onSelectChannel: (login: string) => void;
+  onAddToGrid: (login: string) => void;
+  onOpenPopout: (login: string) => void;
 }
 
 function FollowingList({
@@ -89,7 +110,11 @@ function FollowingList({
   isLoggedIn,
   isSidebarOpen,
   currentChannel,
+  gridChannels,
+  canAddToGrid,
   onSelectChannel,
+  onAddToGrid,
+  onOpenPopout,
 }: FollowingListProps) {
   if (isLoading) {
     return isSidebarOpen ? (
@@ -116,8 +141,12 @@ function FollowingList({
           gameName={c.stream?.game?.name}
           viewersCount={c.stream?.viewersCount}
           isActive={currentChannel === c.login}
+          isInGrid={gridChannels.includes(c.login)}
+          canAddToGrid={canAddToGrid}
           isSidebarOpen={isSidebarOpen}
           onSelect={() => onSelectChannel(c.login)}
+          onAddToGrid={() => onAddToGrid(c.login)}
+          onOpenPopout={() => onOpenPopout(c.login)}
         />
       ))}
     </>
@@ -129,7 +158,11 @@ interface TopStreamsListProps {
   isLoading: boolean;
   isSidebarOpen: boolean;
   currentChannel: string | null;
+  gridChannels: string[];
+  canAddToGrid: boolean;
   onSelectChannel: (login: string) => void;
+  onAddToGrid: (login: string) => void;
+  onOpenPopout: (login: string) => void;
 }
 
 function TopStreamsList({
@@ -137,7 +170,11 @@ function TopStreamsList({
   isLoading,
   isSidebarOpen,
   currentChannel,
+  gridChannels,
+  canAddToGrid,
   onSelectChannel,
+  onAddToGrid,
+  onOpenPopout,
 }: TopStreamsListProps) {
   if (isLoading) {
     return isSidebarOpen ? (
@@ -156,8 +193,12 @@ function TopStreamsList({
           gameName={s.game?.name}
           viewersCount={s.viewersCount}
           isActive={currentChannel === s.broadcaster.login}
+          isInGrid={gridChannels.includes(s.broadcaster.login)}
+          canAddToGrid={canAddToGrid}
           isSidebarOpen={isSidebarOpen}
           onSelect={() => onSelectChannel(s.broadcaster.login)}
+          onAddToGrid={() => onAddToGrid(s.broadcaster.login)}
+          onOpenPopout={() => onOpenPopout(s.broadcaster.login)}
         />
       ))}
     </>
@@ -171,8 +212,12 @@ interface ChannelItemProps {
   gameName?: string;
   viewersCount?: number;
   isActive: boolean;
+  isInGrid: boolean;
+  canAddToGrid: boolean;
   isSidebarOpen: boolean;
   onSelect: () => void;
+  onAddToGrid: () => void;
+  onOpenPopout: () => void;
 }
 
 function ChannelItem({
@@ -182,45 +227,71 @@ function ChannelItem({
   gameName,
   viewersCount,
   isActive,
+  isInGrid,
+  canAddToGrid,
   isSidebarOpen,
   onSelect,
+  onAddToGrid,
+  onOpenPopout,
 }: ChannelItemProps) {
+  const handleClick = (e: React.MouseEvent) => {
+    if (e.shiftKey && !isInGrid) {
+      e.preventDefault();
+      onAddToGrid();
+    } else {
+      onSelect();
+    }
+  };
+
   return (
-    <button
-      onClick={onSelect}
-      className={cn(
-        "w-full flex items-center p-2 hover:bg-hover transition-colors group relative",
-        isActive && "bg-elevated"
-      )}
-    >
-      <div className="w-8 h-8 bg-elevated rounded-full flex-shrink-0 overflow-hidden border border-border">
-        {profileImageURL ? (
-          <img src={profileImageURL} alt={login} />
-        ) : (
-          <div className="w-full h-full bg-elevated" />
+    <div className={cn("group/row relative", isActive && "bg-elevated")}>
+      <button
+        onClick={handleClick}
+        className={cn(
+          "w-full flex items-center p-2 hover:bg-hover transition-colors group relative"
         )}
-      </div>
+        title="Click to play • Shift+click to add to grid"
+      >
+        <div className="w-8 h-8 bg-elevated rounded-full flex-shrink-0 overflow-hidden border border-border">
+          {profileImageURL ? (
+            <img src={profileImageURL} alt={login} />
+          ) : (
+            <div className="w-full h-full bg-elevated" />
+          )}
+        </div>
+        {isSidebarOpen && (
+          <div className="ml-3 flex-1 flex flex-col items-start overflow-hidden text-left">
+            <span className="font-semibold text-[13px] truncate w-full">{displayName}</span>
+            <span className="text-[11px] text-muted truncate w-full italic">
+              {gameName || "Streaming"}
+            </span>
+          </div>
+        )}
+        {isSidebarOpen && viewersCount !== undefined && (
+          <div className="flex items-center gap-1">
+            <div className="w-2 h-2 bg-red-600 rounded-full" />
+            <span className="text-[11px] text-muted font-medium">
+              {formatViewers(viewersCount)}
+            </span>
+          </div>
+        )}
+        {!isSidebarOpen && (
+          <div className="absolute left-14 bg-elevated text-white px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-lg border border-border pointer-events-none">
+            {displayName} {viewersCount !== undefined && `• ${formatViewers(viewersCount)}`}
+          </div>
+        )}
+      </button>
+
       {isSidebarOpen && (
-        <div className="ml-3 flex-1 flex flex-col items-start overflow-hidden text-left">
-          <span className="font-semibold text-[13px] truncate w-full">{displayName}</span>
-          <span className="text-[11px] text-muted truncate w-full italic">
-            {gameName || "Streaming"}
-          </span>
-        </div>
+        <ChannelActionButtons
+          variant="row"
+          canAddToGrid={canAddToGrid}
+          isInGrid={isInGrid}
+          onAddToGrid={onAddToGrid}
+          onOpenPopout={onOpenPopout}
+          className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 transition-opacity"
+        />
       )}
-      {isSidebarOpen && viewersCount !== undefined && (
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-red-600 rounded-full" />
-          <span className="text-[11px] text-muted font-medium">
-            {formatViewers(viewersCount)}
-          </span>
-        </div>
-      )}
-      {!isSidebarOpen && (
-        <div className="absolute left-14 bg-elevated text-white px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-lg border border-border pointer-events-none">
-          {displayName} {viewersCount !== undefined && `• ${formatViewers(viewersCount)}`}
-        </div>
-      )}
-    </button>
+    </div>
   );
 }

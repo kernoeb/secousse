@@ -3,3 +3,4 @@ export { useChat } from "./useChat";
 export { useEmotes } from "./useEmotes";
 export { useSearch } from "./useSearch";
 export { useTopStreams } from "./useTopStreams";
+export { useUserInfo } from "./useUserInfo";

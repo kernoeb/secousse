@@ -20,24 +20,26 @@ import type { UserInfo, QualityLevel } from "../types";
 interface VideoPlayerProps {
   channel: string;
   userInfo: UserInfo | null;
-  isLoadingStream: boolean;
-  setIsLoadingStream: (loading: boolean) => void;
   isFullscreen: boolean;
   setIsFullscreen: (fullscreen: boolean) => void;
+  forceMuted?: boolean;
+  compact?: boolean;
+  onRequestFocus?: () => void;
 }
 
 export function VideoPlayer({
   channel,
   userInfo,
-  isLoadingStream,
-  setIsLoadingStream,
   isFullscreen,
   setIsFullscreen,
+  forceMuted = false,
+  compact = false,
+  onRequestFocus,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const listenersCleanupRef = useRef<(() => void) | null>(null);
-  
+
   const [isPaused, setIsPaused] = useState(false);
   const [isMuted, setIsMuted] = useState(getInitialMuted);
   const [volume, setVolume] = useState(getInitialVolume);
@@ -45,17 +47,45 @@ export function VideoPlayer({
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [currentQuality, setCurrentQuality] = useState<number>(AUTO_QUALITY);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [isLoadingStream, setIsLoadingStream] = useState(true);
+
+  useEffect(() => { setIsLoadingStream(true); }, [channel]);
+  useEffect(() => {
+    if (userInfo && !userInfo.stream) setIsLoadingStream(false);
+  }, [userInfo]);
 
   // Refs so the async stream-load effect reads the latest preferences
   // without making them deps (which would re-create the HLS instance).
   const volumeRef = useRef(volume);
   const isMutedRef = useRef(isMuted);
+  const forceMutedRef = useRef(forceMuted);
+  const compactRef = useRef(compact);
   const preferredQualityHeightRef = useRef<number | null>(null);
   if (preferredQualityHeightRef.current === null) {
     preferredQualityHeightRef.current = getInitialPreferredQualityHeight();
   }
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { forceMutedRef.current = forceMuted; }, [forceMuted]);
+  useEffect(() => { compactRef.current = compact; }, [compact]);
+
+  // In compact (grid) mode the focused tile owns audio unconditionally; the
+  // user's persisted mute preference is ignored to avoid stale-state surprises
+  // when focus moves. In single-stream mode we honor the preference as before.
+  const desiredMuted = () => forceMutedRef.current || (!compactRef.current && isMutedRef.current);
+
+  // Apply a target muted state to the <video> and the React mirror in one step.
+  // The DOM `volumechange` event doesn't fire for no-op assignments, so the
+  // icon state must be synced manually here.
+  const applyMuted = useCallback((wanted: boolean) => {
+    const video = videoRef.current;
+    if (video && video.muted !== wanted) video.muted = wanted;
+    setIsMuted((prev) => prev === wanted ? prev : wanted);
+  }, []);
+
+  useEffect(() => {
+    applyMuted(desiredMuted());
+  }, [forceMuted, compact, applyMuted]);
 
   useEffect(() => {
     if (!channel || !userInfo?.stream) return;
@@ -138,13 +168,13 @@ export function VideoPlayer({
 
           if (videoRef.current) {
             videoRef.current.volume = volumeRef.current;
-            videoRef.current.muted = isMutedRef.current;
+            applyMuted(desiredMuted());
             videoRef.current.play().then(
               () => info(`[VideoPlayer] play() resolved (muted=${videoRef.current?.muted})`),
               () => {
                 // Browser blocked autoplay with sound — fall back to muted.
                 if (videoRef.current) {
-                  videoRef.current.muted = true;
+                  applyMuted(true);
                   videoRef.current.play().then(
                     () => info(`[VideoPlayer] play() resolved on muted fallback`),
                     e => logError(`[VideoPlayer] Playback failed: ${e}`),
@@ -236,28 +266,31 @@ export function VideoPlayer({
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
-    if (video) {
-      const next = !video.muted;
-      video.muted = next;
-      persistMuted(next);
-    }
-  }, []);
+    if (!video) return;
+    if (forceMutedRef.current) return;
+    const next = !video.muted;
+    video.muted = next;
+    if (!compact) persistMuted(next);
+  }, [compact]);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
     const video = videoRef.current;
     if (!video) return;
+    if (forceMutedRef.current) return;
     video.volume = newVolume;
     const muted = newVolume === 0;
     video.muted = muted;
-    persistVolume(newVolume);
-    if (muted !== isMutedRef.current) {
-      persistMuted(muted);
+    if (!compact) {
+      persistVolume(newVolume);
+      if (muted !== isMutedRef.current) {
+        persistMuted(muted);
+      }
     }
-  }, []);
+  }, [compact]);
 
   if (userInfo && !userInfo.stream && !isLoadingStream) {
     return (
-      <div className="flex-1 relative bg-black">
+      <div className="flex-1 relative bg-black min-h-0 min-w-0 overflow-hidden">
         <div className="absolute inset-0 flex items-center justify-center bg-base">
           <div className="flex flex-col items-center gap-4 text-center">
             {userInfo?.profileImageURL && (
@@ -280,7 +313,7 @@ export function VideoPlayer({
   return (
     <div
       className={cn(
-        "flex-1 relative bg-black group",
+        "flex-1 relative bg-black group min-h-0 min-w-0 overflow-hidden",
         isFullscreen && "fixed inset-0 z-50"
       )}
     >
@@ -289,6 +322,10 @@ export function VideoPlayer({
         className="w-full h-full object-contain shadow-2xl"
         autoPlay
         playsInline
+        onClick={() => {
+          onRequestFocus?.();
+          applyMuted(desiredMuted());
+        }}
         onPlay={() => {
           setIsPaused(false);
           hlsRef.current?.startLoad(-1);
@@ -315,9 +352,8 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Live indicator */}
       {userInfo?.stream && (
-        <div className="absolute top-4 left-4 flex items-center gap-2">
+        <div className="absolute top-4 left-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <div className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
             <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
             LIVE
@@ -343,10 +379,14 @@ export function VideoPlayer({
           {/* Volume Control */}
           <div
             className="relative flex items-center"
-            onMouseEnter={() => setShowVolumeSlider(true)}
+            onMouseEnter={() => !forceMuted && setShowVolumeSlider(true)}
             onMouseLeave={() => setShowVolumeSlider(false)}
           >
-            <button onClick={toggleMute} className="p-2 hover:bg-white/20 rounded transition-colors">
+            <button
+              onClick={toggleMute}
+              disabled={forceMuted}
+              className="p-2 hover:bg-white/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               {isMuted || volume === 0 ? (
                 <VolumeX className="w-5 h-5 text-white" />
               ) : (
@@ -366,8 +406,9 @@ export function VideoPlayer({
                 max="1"
                 step="0.05"
                 value={isMuted ? 0 : volume}
+                disabled={forceMuted}
                 onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                className="w-full h-1 bg-white/30 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                className="w-full h-1 bg-white/30 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
               />
             </div>
           </div>
@@ -423,17 +464,18 @@ export function VideoPlayer({
             )}
           </div>
 
-          {/* Fullscreen Button */}
-          <button
-            onClick={() => setIsFullscreen(!isFullscreen)}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
-          >
-            {isFullscreen ? (
-              <Minimize className="w-5 h-5 text-white" />
-            ) : (
-              <Maximize className="w-5 h-5 text-white" />
-            )}
-          </button>
+          {!compact && (
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-2 hover:bg-white/20 rounded transition-colors"
+            >
+              {isFullscreen ? (
+                <Minimize className="w-5 h-5 text-white" />
+              ) : (
+                <Maximize className="w-5 h-5 text-white" />
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -2,70 +2,128 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
-import { useAuth, useChat, useEmotes, useSearch, useTopStreams } from "./hooks";
-import { Navbar, Sidebar, VideoPlayer, Chat, StreamInfo, BrowseGrid } from "./components";
-import { getInitialChannel, getInitialActiveTab, persistChannel, persistActiveTab, getInitialSidebarOpen, getInitialChatOpen, persistSidebarOpen, persistChatOpen } from "./lib/utils";
+import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUserInfo } from "./hooks";
+import { Navbar, Sidebar, StreamGrid, Chat, StreamInfo, BrowseGrid } from "./components";
+import {
+  getInitialActiveTab,
+  persistActiveTab,
+  getInitialSidebarOpen,
+  getInitialChatOpen,
+  persistSidebarOpen,
+  persistChatOpen,
+  persistGridChannels,
+  getInitialFocusedIndex,
+  persistFocusedIndex,
+  persistChannel,
+  getInitialGridOrLegacyChannel,
+  GRID_MAX_TILES,
+} from "./lib/utils";
 import { startSpam, stopSpam } from "./lib/spamSim";
-import type { UserInfo, ActiveTab, GetUserInfoResponse } from "./types";
+import type { ActiveTab } from "./types";
 
 export default function App() {
-  // Channel state
-  const [channel, setChannelInternal] = useState<string | null>(getInitialChannel);
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [channels, setChannelsInternal] = useState<string[]>(getInitialGridOrLegacyChannel);
+  const [focusedIndex, setFocusedIndexInternal] = useState<number>(() => {
+    const idx = getInitialFocusedIndex();
+    return idx >= channels.length ? 0 : idx;
+  });
+
+  const focusedChannel = channels[focusedIndex] ?? null;
+
+  const { userInfo } = useUserInfo(focusedChannel);
   const [isFollowing, setIsFollowing] = useState(false);
-  
-  // UI state
+
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(getInitialActiveTab);
   const [isSidebarOpen, setIsSidebarOpenInternal] = useState(getInitialSidebarOpen);
   const [isChatOpen, setIsChatOpenInternal] = useState(getInitialChatOpen);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Custom hooks
   const { isLoggedIn, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
-  const chat = useChat(channel, isLoggedIn);
-  
-  const intervalsRef = useRef<{ sidebar?: ReturnType<typeof setInterval>; stream?: ReturnType<typeof setInterval> }>({});
-  const loadingChannelRef = useRef<string | null>(null);
+  const chat = useChat(focusedChannel, isLoggedIn);
 
-  // Wrapper to persist channel
-  const setChannel = useCallback((newChannel: string | null) => {
-    persistChannel(newChannel);
-    setChannelInternal(newChannel);
+  const setChannels = useCallback((updater: string[] | ((prev: string[]) => string[])) => {
+    setChannelsInternal((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      persistGridChannels(next);
+      persistChannel(next[0] ?? null);
+      return next;
+    });
   }, []);
 
-  // Wrapper to persist active tab
+  const setFocusedIndex = useCallback((updater: number | ((prev: number) => number)) => {
+    setFocusedIndexInternal((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      persistFocusedIndex(next);
+      return next;
+    });
+  }, []);
+
+  const openPopout = useCallback(async (c: string) => {
+    try {
+      await invoke("open_popout", { channel: c });
+    } catch (err) {
+      logError(`[App] open_popout failed: ${err}`);
+    }
+  }, []);
+
+  const selectChannel = useCallback((c: string | null) => {
+    setChannels(c === null ? [] : [c]);
+    setFocusedIndex(0);
+  }, [setChannels, setFocusedIndex]);
+
+  const addToGrid = useCallback((c: string) => {
+    const existing = channels.indexOf(c);
+    if (existing >= 0) {
+      setFocusedIndex(existing);
+      return;
+    }
+    if (channels.length >= GRID_MAX_TILES) {
+      info(`[App] Grid full (${GRID_MAX_TILES} tiles), opening popout for ${c}`);
+      openPopout(c);
+      return;
+    }
+    setChannels([...channels, c]);
+    setFocusedIndex(channels.length);
+  }, [channels, setChannels, setFocusedIndex, openPopout]);
+
+  const removeTile = useCallback((idx: number) => {
+    const next = channels.filter((_, i) => i !== idx);
+    setChannels(next);
+    if (next.length === 0) {
+      setFocusedIndex(0);
+    } else if (idx < focusedIndex) {
+      setFocusedIndex(Math.max(0, focusedIndex - 1));
+    } else if (idx === focusedIndex) {
+      setFocusedIndex(Math.min(focusedIndex, next.length - 1));
+    }
+  }, [channels, focusedIndex, setChannels, setFocusedIndex]);
+
   const setActiveTab = useCallback((tab: ActiveTab) => {
     persistActiveTab(tab);
     setActiveTabInternal(tab);
   }, []);
 
-  // Wrapper to persist sidebar state
   const setIsSidebarOpen = useCallback((open: boolean) => {
     persistSidebarOpen(open);
     setIsSidebarOpenInternal(open);
   }, []);
 
-  // Wrapper to persist chat state
   const setIsChatOpen = useCallback((open: boolean) => {
     persistChatOpen(open);
     setIsChatOpenInternal(open);
   }, []);
 
-  // Search hook with channel selection callback
-  const search = useSearch(setChannel);
+  const search = useSearch(selectChannel);
 
-  // Dev-only chat spam simulator: __spam.start({ rate, emotesPerMsg, durationSec }) / __spam.stop()
-  // Auto-start when VITE_AUTOSPAM is set (JSON opts), once channel + emotes are ready.
   const autospamFiredRef = useRef(false);
   const allEmotesRef = useRef(allEmotes);
   allEmotesRef.current = allEmotes;
   useEffect(() => {
-    if (!import.meta.env.DEV || !channel) return;
+    if (!import.meta.env.DEV || !focusedChannel) return;
     window.__spam = {
-      start: (opts = {}) => startSpam(channel, Array.from(allEmotesRef.current.keys()), opts),
+      start: (opts = {}) => startSpam(focusedChannel, Array.from(allEmotesRef.current.keys()), opts),
       stop: stopSpam,
     };
 
@@ -80,28 +138,23 @@ export default function App() {
         const urls = Array.from(map.values());
         const animated = urls.filter((u) => /\/animated\/|(\.webp|\.gif)(\?|$)/i.test(u) || /7tv\.app|betterttv\.net|frankerfacez\.com/i.test(u)).length;
         info(`[App] starting spam: pool=${names.length} emotes (likely-animated≈${animated})`);
-        startSpam(channel, names, opts);
+        startSpam(focusedChannel, names, opts);
       }, 5000);
     }
 
     return () => stopSpam();
-  }, [channel, allEmotes]);
+  }, [focusedChannel, allEmotes]);
 
-  // Initialize app
   useEffect(() => {
-    // Attach console once to forward browser logs to Rust
     attachConsole();
     info("[App] Initializing...");
 
-    // Signal Rust to show the window when the UI is ready
-    // Using setTimeout 0 inside useEffect ensures this runs after the first paint cycle
     setTimeout(() => {
-        invoke("show_main_window");
+      invoke("show_main_window");
     }, 0);
 
     loadTopStreams();
 
-    // ESC key to exit video fullscreen
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setIsFullscreen(false);
@@ -113,7 +166,6 @@ export default function App() {
     };
   }, [loadTopStreams]);
 
-  // Auto-refresh sidebar data every 60 seconds
   useEffect(() => {
     const REFRESH_INTERVAL = 60 * 1000;
 
@@ -127,117 +179,32 @@ export default function App() {
       }
     };
 
-    // Clear existing interval before setting new one
-    if (intervalsRef.current.sidebar) {
-      clearInterval(intervalsRef.current.sidebar);
-    }
-    
-    const intervalId = setInterval(refreshData, REFRESH_INTERVAL);
-    intervalsRef.current.sidebar = intervalId;
-    
-    return () => {
-      if (intervalsRef.current.sidebar) {
-        clearInterval(intervalsRef.current.sidebar);
-      }
-    };
+    const id = setInterval(refreshData, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, [activeTab, isLoggedIn, selfInfo?.id, refreshFollowedChannels, loadTopStreams]);
 
-  // Auto-refresh current stream info every 60 seconds
   useEffect(() => {
-    if (!channel) return;
+    if (!userInfo?.id) return;
+    loadChannelEmotes(userInfo.id);
+  }, [userInfo?.id, loadChannelEmotes]);
 
-    const REFRESH_INTERVAL = 60 * 1000;
+  useEffect(() => {
+    if (!isLoggedIn || !selfInfo?.id || !userInfo?.stream?.id) return;
 
-    const refreshStreamInfo = async () => {
-      try {
-        info(`[App] Auto-refreshing stream info for: ${channel}`);
-        const data = await invoke<GetUserInfoResponse>("get_user_info", { login: channel });
-        setUserInfo(data.user);
-
-        if (isLoggedIn && selfInfo && data.user.stream) {
-          await invoke("update_watch_state", {
-            channelLogin: data.user.login,
-            channelId: data.user.id,
-            streamId: data.user.stream.id,
-            userId: selfInfo.id,
-          });
-        }
-      } catch (err) {
-        logError(`[App] Failed to refresh stream info: ${err}`);
-      }
+    const ping = () => {
+      invoke("update_watch_state", {
+        channelLogin: userInfo.login,
+        channelId: userInfo.id,
+        streamId: userInfo.stream!.id,
+        userId: selfInfo.id,
+      }).catch((err) => logError(`[App] update_watch_state failed: ${err}`));
     };
 
-    // Clear existing interval before setting new one
-    if (intervalsRef.current.stream) {
-      clearInterval(intervalsRef.current.stream);
-    }
-    
-    const intervalId = setInterval(refreshStreamInfo, REFRESH_INTERVAL);
-    intervalsRef.current.stream = intervalId;
-    
-    return () => {
-      if (intervalsRef.current.stream) {
-        clearInterval(intervalsRef.current.stream);
-      }
-    };
-  }, [channel, isLoggedIn, selfInfo]);
+    ping();
+    const id = setInterval(ping, 60_000);
+    return () => clearInterval(id);
+  }, [userInfo?.id, userInfo?.login, userInfo?.stream?.id, isLoggedIn, selfInfo?.id]);
 
-  // Load channel data when channel changes
-  useEffect(() => {
-    if (!channel) {
-      setUserInfo(null);
-      loadingChannelRef.current = null;
-      return;
-    }
-    
-    // Guard against loading the same channel multiple times
-    // Check and set synchronously to prevent race conditions
-    if (loadingChannelRef.current === channel) {
-      return;
-    }
-    loadingChannelRef.current = channel;
-
-    async function loadChannelData() {
-      try {
-        info(`[App] Loading data for channel: ${channel}`);
-        setIsLoadingStream(true);
-        
-        const data = await invoke<GetUserInfoResponse>("get_user_info", { login: channel });
-        setUserInfo(data.user);
-
-        if (!data.user?.stream) {
-          info(`[App] Channel ${channel} is offline`);
-          setIsLoadingStream(false);
-          loadingChannelRef.current = null;
-          return;
-        }
-
-        // Load emotes and update watch state in parallel
-        const emotesPromise = loadChannelEmotes(data.user.id);
-        const watchStatePromise = isLoggedIn && selfInfo
-          ? invoke("update_watch_state", {
-              channelLogin: data.user.login,
-              channelId: data.user.id,
-              streamId: data.user.stream.id,
-              userId: selfInfo.id,
-            })
-          : Promise.resolve();
-        
-        await Promise.all([emotesPromise, watchStatePromise]);
-        
-        setIsLoadingStream(false);
-        loadingChannelRef.current = null;
-      } catch (err) {
-        logError(`[App] Failed to load channel data: ${err}`);
-        setIsLoadingStream(false);
-        loadingChannelRef.current = null;
-      }
-    }
-
-    loadChannelData();
-  }, [channel, isLoggedIn, selfInfo, loadChannelEmotes]);
-
-  // Check follow status when channel changes
   useEffect(() => {
     if (isLoggedIn && userInfo) {
       const isInFollowedList = followedChannels.some(c => c.id === userInfo.id);
@@ -247,7 +214,6 @@ export default function App() {
     }
   }, [userInfo, followedChannels, isLoggedIn]);
 
-  // Follow/unfollow handler
   const handleFollow = useCallback(async () => {
     if (!isLoggedIn || !userInfo || !selfInfo?.id) return;
 
@@ -268,6 +234,8 @@ export default function App() {
       logError(`[App] Follow/unfollow error: ${err}`);
     }
   }, [isLoggedIn, userInfo, selfInfo?.id, isFollowing, refreshFollowedChannels]);
+
+  const canAddMoreTiles = channels.length < GRID_MAX_TILES;
 
   return (
     <div className="flex flex-col h-screen w-full bg-base text-[#e8e8ee]">
@@ -290,7 +258,7 @@ export default function App() {
         onLoadTopStreams={() => loadTopStreams()}
         hasTopStreams={topStreams.length > 0}
         onGoHome={() => {
-          setChannel(null);
+          selectChannel(null);
           setActiveTab("browse");
           if (topStreams.length === 0) {
             loadTopStreams();
@@ -303,8 +271,12 @@ export default function App() {
           isOpen={isSidebarOpen}
           setIsOpen={setIsSidebarOpen}
           activeTab={activeTab}
-          currentChannel={channel}
-          onSelectChannel={setChannel}
+          currentChannel={focusedChannel}
+          gridChannels={channels}
+          canAddToGrid={canAddMoreTiles}
+          onSelectChannel={selectChannel}
+          onAddToGrid={addToGrid}
+          onOpenPopout={openPopout}
           followedChannels={followedChannels}
           isLoadingFollowed={isLoadingFollowed}
           isLoggedIn={isLoggedIn}
@@ -313,30 +285,36 @@ export default function App() {
         />
 
         <main className="flex-1 bg-base flex flex-col relative overflow-hidden">
-          {channel ? (
+          {channels.length > 0 ? (
             <>
-              <VideoPlayer
-                channel={channel}
-                userInfo={userInfo}
-                isLoadingStream={isLoadingStream}
-                setIsLoadingStream={setIsLoadingStream}
+              <StreamGrid
+                channels={channels}
+                focusedIndex={focusedIndex}
+                onFocusChange={setFocusedIndex}
+                onRemoveTile={removeTile}
+                onOpenPopout={openPopout}
                 isFullscreen={isFullscreen}
                 setIsFullscreen={setIsFullscreen}
               />
-              <StreamInfo
-                channel={channel}
-                userInfo={userInfo}
-                isFollowing={isFollowing}
-                isLoggedIn={isLoggedIn}
-                onFollow={handleFollow}
-              />
+              {focusedChannel && (
+                <StreamInfo
+                  channel={focusedChannel}
+                  userInfo={userInfo}
+                  isFollowing={isFollowing}
+                  isLoggedIn={isLoggedIn}
+                  onFollow={handleFollow}
+                />
+              )}
             </>
           ) : (
             <BrowseGrid
               streams={topStreams}
               isLoading={isLoadingBrowse}
               isLoggedIn={isLoggedIn}
-              onSelectChannel={setChannel}
+              onSelectChannel={selectChannel}
+              onAddToGrid={addToGrid}
+              canAddToGrid={canAddMoreTiles}
+              onOpenPopout={openPopout}
               onRetry={() => loadTopStreams()}
             />
           )}

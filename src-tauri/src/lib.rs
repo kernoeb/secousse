@@ -31,6 +31,36 @@ async fn show_main_window(window: Window) {
     let _ = window.show();
 }
 
+const POPOUT_LABEL_PREFIX: &str = "popout-";
+const POPOUT_QUERY_PARAM: &str = "popout";
+
+#[tauri::command]
+async fn open_popout(app: tauri::AppHandle, channel: String) -> Result<(), String> {
+    let channel = channel.trim().to_lowercase();
+    if channel.is_empty() {
+        return Err("empty channel".to_string());
+    }
+    let label = format!("{}{}", POPOUT_LABEL_PREFIX, channel);
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let url = format!("index.html?{}={}", POPOUT_QUERY_PARAM, channel);
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title(format!("Secousse — {}", channel))
+        .inner_size(960.0, 540.0)
+        .min_inner_size(320.0, 180.0);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.title_bar_style(tauri::TitleBarStyle::Transparent);
+
+    builder.build().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn get_stream_url(state: State<'_, AppState>, login: String) -> Result<String, String> {
     let client = state.twitch_client.lock().await.clone();
@@ -570,7 +600,7 @@ pub fn run() {
             get_twitch_global_emotes, get_twitch_channel_emotes,
             login, logout, is_logged_in, update_watch_state, set_access_token,
             search_channels, follow_channel, unfollow_channel, get_top_streams,
-            show_main_window,
+            show_main_window, open_popout,
             emote_decoder::decode_emote
         ])
         .run(tauri::generate_context!())

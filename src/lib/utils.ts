@@ -98,6 +98,57 @@ export function persistPreferredQualityHeight(height: number) {
   localStorage.setItem("preferredQualityHeight", String(height));
 }
 
+export const GRID_MAX_TILES = 4;
+
+/** Read the grid layout from localStorage. Empty array if absent or invalid. */
+export function getInitialGridChannels(): string[] {
+  return readPersisted<string[]>("gridChannels", [], (r) => {
+    try {
+      const parsed = JSON.parse(r);
+      if (!Array.isArray(parsed)) return undefined;
+      const filtered = parsed.filter((v): v is string => typeof v === "string");
+      return filtered.slice(0, GRID_MAX_TILES);
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+export function persistGridChannels(channels: string[]) {
+  if (channels.length === 0) {
+    localStorage.removeItem("gridChannels");
+  } else {
+    localStorage.setItem("gridChannels", JSON.stringify(channels.slice(0, GRID_MAX_TILES)));
+  }
+}
+
+export function getInitialGridOrLegacyChannel(): string[] {
+  const grid = getInitialGridChannels();
+  if (grid.length > 0) return grid;
+  const last = getInitialChannel();
+  return last ? [last] : [];
+}
+
+export function getInitialFocusedIndex(): number {
+  return readPersisted("focusedIndex", 0, (r) => {
+    const n = parseInt(r, 10);
+    return Number.isNaN(n) || n < 0 ? undefined : n;
+  });
+}
+
+export function persistFocusedIndex(idx: number) {
+  localStorage.setItem("focusedIndex", String(idx));
+}
+
+export const POPOUT_QUERY_PARAM = "popout";
+
+export function getPopoutChannel(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const c = params.get(POPOUT_QUERY_PARAM);
+  return c && c.length > 0 ? c : null;
+}
+
 /** Build a Twitch emote CDN URL from an emote ID. */
 export function twitchEmoteUrl(id: string, size: "1.0" | "2.0" | "3.0" = "2.0"): string {
   return `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/${size}`;
