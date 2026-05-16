@@ -113,7 +113,7 @@ export function Navbar({
 
         {/* Search Results Dropdown */}
         {showSearchResults && searchResults.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-elevated border border-border rounded-md shadow-xl z-[60] max-h-96 overflow-y-auto">
+          <div className="absolute top-full left-0 right-0 mt-1 bg-elevated border border-border rounded-md shadow-xl z-[60] max-h-96 overflow-y-auto scrollbar-thin">
             {searchResults.map((result) => (
               <button
                 key={result.id}

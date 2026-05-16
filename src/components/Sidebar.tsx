@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import { cn, formatViewers } from "../lib/utils";
 import { ChannelActionButtons } from "./ChannelActionButtons";
@@ -59,7 +60,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin">
         {activeTab === "following" ? (
           <FollowingList
             channels={followedChannels}
@@ -234,6 +235,9 @@ function ChannelItem({
   onAddToGrid,
   onOpenPopout,
 }: ChannelItemProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
+
   const handleClick = (e: React.MouseEvent) => {
     if (e.shiftKey && !isInGrid) {
       e.preventDefault();
@@ -243,14 +247,21 @@ function ChannelItem({
     }
   };
 
+  const handleMouseEnter = () => {
+    if (isSidebarOpen || !buttonRef.current) return;
+    const r = buttonRef.current.getBoundingClientRect();
+    setTooltipPos({ top: r.top + r.height / 2, left: r.right + 8 });
+  };
+
   return (
     <div className={cn("group/row relative", isActive && "bg-elevated")}>
       <button
+        ref={buttonRef}
         onClick={handleClick}
-        className={cn(
-          "w-full flex items-center p-2 hover:bg-hover transition-colors group relative"
-        )}
-        title="Click to play • Shift+click to add to grid"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={() => setTooltipPos(null)}
+        className="w-full flex items-center p-2 hover:bg-hover transition-colors"
+        title={isSidebarOpen ? "Click to play • Shift+click to add to grid" : undefined}
       >
         <div className="w-8 h-8 bg-elevated rounded-full flex-shrink-0 overflow-hidden border border-border">
           {profileImageURL ? (
@@ -260,7 +271,7 @@ function ChannelItem({
           )}
         </div>
         {isSidebarOpen && (
-          <div className="ml-3 flex-1 flex flex-col items-start overflow-hidden text-left">
+          <div className="ml-3 flex-1 min-w-0 flex flex-col items-start overflow-hidden text-left">
             <span className="font-semibold text-[13px] truncate w-full">{displayName}</span>
             <span className="text-[11px] text-muted truncate w-full italic">
               {gameName || "Streaming"}
@@ -268,19 +279,23 @@ function ChannelItem({
           </div>
         )}
         {isSidebarOpen && viewersCount !== undefined && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
             <div className="w-2 h-2 bg-red-600 rounded-full" />
             <span className="text-[11px] text-muted font-medium">
               {formatViewers(viewersCount)}
             </span>
           </div>
         )}
-        {!isSidebarOpen && (
-          <div className="absolute left-14 bg-elevated text-white px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap shadow-lg border border-border pointer-events-none">
-            {displayName} {viewersCount !== undefined && `• ${formatViewers(viewersCount)}`}
-          </div>
-        )}
       </button>
+      {tooltipPos && !isSidebarOpen && (
+        <div
+          style={{ position: "fixed", top: tooltipPos.top, left: tooltipPos.left }}
+          className="-translate-y-1/2 bg-elevated text-white px-2 py-1 rounded text-xs z-50 whitespace-nowrap shadow-lg border border-border pointer-events-none"
+        >
+          {displayName}
+          {viewersCount !== undefined && ` • ${formatViewers(viewersCount)}`}
+        </div>
+      )}
 
       {isSidebarOpen && (
         <ChannelActionButtons

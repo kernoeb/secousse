@@ -434,7 +434,7 @@ export function VideoPlayer({
                   <div className="p-2 border-b border-border text-xs text-muted font-semibold">
                     Quality
                   </div>
-                  <div className="max-h-64 overflow-y-auto">
+                  <div className="max-h-64 overflow-y-auto scrollbar-thin">
                     <button
                       onClick={() => changeQuality(AUTO_QUALITY)}
                       className={cn(

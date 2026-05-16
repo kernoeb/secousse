@@ -24,7 +24,7 @@ export function BrowseGrid({
   onRetry,
 }: BrowseGridProps) {
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-6">
       <h1 className="text-2xl font-bold mb-6">
         {isLoggedIn ? "Live channels" : "Top Live Streams"}
       </h1>
