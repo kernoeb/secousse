@@ -68,3 +68,14 @@ body {
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-hover);
 }
+
+/* Pairs with .scrollbar-thin: reserves the same 8px gutter so toggling
+   visibility never shifts the content horizontally. */
+.scrollbar-hidden {
+  scrollbar-width: none;
+  scrollbar-gutter: stable;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}

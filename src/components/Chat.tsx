@@ -183,7 +183,7 @@ export function Chat({
         <VList
           ref={vlistRef}
           onScrollEnd={onListScrollEnd}
-          className="flex-1 scrollbar-thin"
+          className={isFollowing ? "flex-1 scrollbar-hidden" : "flex-1 scrollbar-thin"}
           style={VLIST_STYLE}
         >
           {displayed.map((m) => (
