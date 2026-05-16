@@ -10,6 +10,29 @@ use tokio::sync::Mutex;
 use emotes::Emote;
 use tauri_plugin_store::StoreExt;
 
+#[cfg(target_os = "windows")]
+fn apply_dark_titlebar(window: &tauri::WebviewWindow) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+
+    if let Ok(hwnd) = window.hwnd() {
+        let set = |attr, value: u32| unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                attr,
+                &value as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+        };
+        // BOOL TRUE
+        set(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+        // COLORREF format: 0x00BBGGRR — caption #0f0f14, text #f5f5f5
+        set(DWMWA_CAPTION_COLOR, 0x0014_0F_0F);
+        set(DWMWA_TEXT_COLOR, 0x00F5_F5_F5);
+    }
+}
+
 pub struct WatchState {
     pub channel_login: String,
     pub channel_id: String,
@@ -57,7 +80,12 @@ async fn open_popout(app: tauri::AppHandle, channel: String) -> Result<(), Strin
     #[cfg(target_os = "macos")]
     let builder = builder.title_bar_style(tauri::TitleBarStyle::Transparent);
 
-    builder.build().map_err(|e| e.to_string())?;
+    #[allow(unused_variables)]
+    let window = builder.build().map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    apply_dark_titlebar(&window);
+
     Ok(())
 }
 
@@ -497,6 +525,9 @@ pub fn run() {
             let win_builder = win_builder.title_bar_style(tauri::TitleBarStyle::Transparent);
 
             let window = win_builder.build()?;
+
+            #[cfg(target_os = "windows")]
+            apply_dark_titlebar(&window);
 
             #[cfg(target_os = "macos")]
             {
