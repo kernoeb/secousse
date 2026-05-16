@@ -27,9 +27,38 @@ fn apply_dark_titlebar(window: &tauri::WebviewWindow) {
         };
         // BOOL TRUE
         set(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
-        // COLORREF format: 0x00BBGGRR — caption #0f0f14, text #f5f5f5
-        set(DWMWA_CAPTION_COLOR, 0x0014_0F_0F);
+        // COLORREF format: 0x00BBGGRR — caption #1c1c27 (matches --color-surface-alt), text #f5f5f5
+        set(DWMWA_CAPTION_COLOR, 0x0027_1C_1C);
         set(DWMWA_TEXT_COLOR, 0x00F5_F5_F5);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_dark_titlebar(window: &tauri::WebviewWindow) {
+    use cocoa::appkit::{NSColor, NSWindow};
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let Ok(ns_window_ptr) = window.ns_window() else { return };
+    let ns_window = ns_window_ptr as id;
+    unsafe {
+        // Force NSAppearanceNameDarkAqua so the title bar text stays light
+        // regardless of the user's system appearance. Without this, the title
+        // ("Secousse") renders in default-black against our dark NSColor bg.
+        let name = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
+        let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: name];
+        let _: () = msg_send![ns_window, setAppearance: appearance];
+
+        // #1c1c27 — matches --color-surface-alt (the Navbar background)
+        let bg_color = NSColor::colorWithRed_green_blue_alpha_(
+            nil,
+            28.0 / 255.0,
+            28.0 / 255.0,
+            39.0 / 255.0,
+            1.0,
+        );
+        ns_window.setBackgroundColor_(bg_color);
     }
 }
 
@@ -83,7 +112,7 @@ async fn open_popout(app: tauri::AppHandle, channel: String) -> Result<(), Strin
     #[allow(unused_variables)]
     let window = builder.build().map_err(|e| e.to_string())?;
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     apply_dark_titlebar(&window);
 
     Ok(())
@@ -526,27 +555,9 @@ pub fn run() {
 
             let window = win_builder.build()?;
 
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             apply_dark_titlebar(&window);
 
-            #[cfg(target_os = "macos")]
-            {
-                use cocoa::appkit::{NSColor, NSWindow};
-                use cocoa::base::{id, nil};
-
-                let ns_window = window.ns_window().unwrap() as id;
-                unsafe {
-                    let bg_color = NSColor::colorWithRed_green_blue_alpha_(
-                        nil,
-                        15.0 / 255.0,
-                        15.0 / 255.0,
-                        20.0 / 255.0,
-                        1.0,
-                    );
-                    ns_window.setBackgroundColor_(bg_color);
-                }
-            }
-            
             // Safety fallback: Force show window after 2s if frontend doesn't signal ready
             // This prevents the app from being "invisible" if JS crashes
             let window_clone = window.clone();
