@@ -21,7 +21,7 @@ interface VideoPlayerProps {
   channel: string;
   userInfo: UserInfo | null;
   isFullscreen: boolean;
-  setIsFullscreen: (fullscreen: boolean) => void;
+  setIsFullscreen?: (fullscreen: boolean) => void;
   forceMuted?: boolean;
   compact?: boolean;
   onRequestFocus?: () => void;
@@ -311,12 +311,7 @@ export function VideoPlayer({
   }
 
   return (
-    <div
-      className={cn(
-        "flex-1 relative bg-black group min-h-0 min-w-0 overflow-hidden",
-        isFullscreen && "fixed inset-0 z-50"
-      )}
-    >
+    <div className="flex-1 relative bg-black group min-h-0 min-w-0 overflow-hidden">
       <video
         ref={videoRef}
         className="w-full h-full object-contain shadow-2xl"
@@ -339,7 +334,7 @@ export function VideoPlayer({
           setIsMuted(video.muted);
           setVolume(video.volume);
         }}
-        onDoubleClick={() => setIsFullscreen(!isFullscreen)}
+        onDoubleClick={() => setIsFullscreen?.(!isFullscreen)}
       />
 
       {/* Loading overlay */}
@@ -464,7 +459,7 @@ export function VideoPlayer({
             )}
           </div>
 
-          {!compact && (
+          {setIsFullscreen && (
             <button
               onClick={() => setIsFullscreen(!isFullscreen)}
               className="p-2 hover:bg-white/20 rounded transition-colors"

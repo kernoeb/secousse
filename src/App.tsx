@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
-import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUserInfo } from "./hooks";
+import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUserInfo, useWindowFullscreen } from "./hooks";
 import { Navbar, Sidebar, StreamGrid, Chat, StreamInfo, BrowseGrid } from "./components";
 import {
   getInitialActiveTab,
@@ -36,7 +36,7 @@ export default function App() {
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(getInitialActiveTab);
   const [isSidebarOpen, setIsSidebarOpenInternal] = useState(getInitialSidebarOpen);
   const [isChatOpen, setIsChatOpenInternal] = useState(getInitialChatOpen);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useWindowFullscreen();
 
   const { isLoggedIn, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
@@ -239,50 +239,54 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-base text-[#e8e8ee]">
-      <Navbar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        isLoggedIn={isLoggedIn}
-        selfInfo={selfInfo}
-        onLogin={login}
-        onLogout={logout}
-        searchQuery={search.query}
-        setSearchQuery={search.setQuery}
-        searchResults={search.results}
-        showSearchResults={search.showResults}
-        setShowSearchResults={search.setShowResults}
-        onSelectSearchResult={search.selectResult}
-        onClearSearch={search.clearSearch}
-        onSearch={() => {}}
-        onOpenSidebar={() => setIsSidebarOpen(true)}
-        onLoadTopStreams={() => loadTopStreams()}
-        hasTopStreams={topStreams.length > 0}
-        onGoHome={() => {
-          selectChannel(null);
-          setActiveTab("browse");
-          if (topStreams.length === 0) {
-            loadTopStreams();
-          }
-        }}
-      />
+      {!isFullscreen && (
+        <Navbar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isLoggedIn={isLoggedIn}
+          selfInfo={selfInfo}
+          onLogin={login}
+          onLogout={logout}
+          searchQuery={search.query}
+          setSearchQuery={search.setQuery}
+          searchResults={search.results}
+          showSearchResults={search.showResults}
+          setShowSearchResults={search.setShowResults}
+          onSelectSearchResult={search.selectResult}
+          onClearSearch={search.clearSearch}
+          onSearch={() => {}}
+          onOpenSidebar={() => setIsSidebarOpen(true)}
+          onLoadTopStreams={() => loadTopStreams()}
+          hasTopStreams={topStreams.length > 0}
+          onGoHome={() => {
+            selectChannel(null);
+            setActiveTab("browse");
+            if (topStreams.length === 0) {
+              loadTopStreams();
+            }
+          }}
+        />
+      )}
 
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          isOpen={isSidebarOpen}
-          setIsOpen={setIsSidebarOpen}
-          activeTab={activeTab}
-          currentChannel={focusedChannel}
-          gridChannels={channels}
-          canAddToGrid={canAddMoreTiles}
-          onSelectChannel={selectChannel}
-          onAddToGrid={addToGrid}
-          onOpenPopout={openPopout}
-          followedChannels={followedChannels}
-          isLoadingFollowed={isLoadingFollowed}
-          isLoggedIn={isLoggedIn}
-          topStreams={topStreams}
-          isLoadingBrowse={isLoadingBrowse}
-        />
+        {!isFullscreen && (
+          <Sidebar
+            isOpen={isSidebarOpen}
+            setIsOpen={setIsSidebarOpen}
+            activeTab={activeTab}
+            currentChannel={focusedChannel}
+            gridChannels={channels}
+            canAddToGrid={canAddMoreTiles}
+            onSelectChannel={selectChannel}
+            onAddToGrid={addToGrid}
+            onOpenPopout={openPopout}
+            followedChannels={followedChannels}
+            isLoadingFollowed={isLoadingFollowed}
+            isLoggedIn={isLoggedIn}
+            topStreams={topStreams}
+            isLoadingBrowse={isLoadingBrowse}
+          />
+        )}
 
         <main className="flex-1 bg-base flex flex-col relative overflow-hidden">
           {channels.length > 0 ? (
@@ -296,7 +300,7 @@ export default function App() {
                 isFullscreen={isFullscreen}
                 setIsFullscreen={setIsFullscreen}
               />
-              {focusedChannel && (
+              {!isFullscreen && focusedChannel && (
                 <StreamInfo
                   channel={focusedChannel}
                   userInfo={userInfo}

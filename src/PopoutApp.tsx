@@ -4,7 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 import { MessageSquare, Pin, PinOff } from "lucide-react";
 
-import { useAuth, useChat, useEmotes, useUserInfo } from "./hooks";
+import { useAuth, useChat, useEmotes, useUserInfo, useWindowFullscreen } from "./hooks";
 import { VideoPlayer, Chat } from "./components";
 import { cn } from "./lib/utils";
 
@@ -13,7 +13,7 @@ interface PopoutAppProps {
 }
 
 export default function PopoutApp({ channel }: PopoutAppProps) {
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useWindowFullscreen();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
@@ -49,41 +49,43 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
 
   return (
     <div className="flex flex-col h-screen w-full bg-base text-[#e8e8ee]">
-      <header className="flex items-center justify-between px-3 py-2 bg-surface border-b border-border shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          {userInfo?.profileImageURL && (
-            <img
-              src={userInfo.profileImageURL}
-              alt={userInfo.displayName}
-              className="w-6 h-6 rounded-full"
-            />
-          )}
-          <span className="font-semibold text-sm truncate">
-            {userInfo?.displayName || channel}
-          </span>
-          {userInfo?.stream && (
-            <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-              LIVE
+      {!isFullscreen && (
+        <header className="flex items-center justify-between px-3 py-2 bg-surface border-b border-border shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {userInfo?.profileImageURL && (
+              <img
+                src={userInfo.profileImageURL}
+                alt={userInfo.displayName}
+                className="w-6 h-6 rounded-full"
+              />
+            )}
+            <span className="font-semibold text-sm truncate">
+              {userInfo?.displayName || channel}
             </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setIsChatOpen(!isChatOpen)}
-            className={cn("p-1.5 rounded hover:bg-hover transition-colors", isChatOpen && "text-twitch")}
-            title="Toggle chat"
-          >
-            <MessageSquare className="w-4 h-4" />
-          </button>
-          <button
-            onClick={toggleAlwaysOnTop}
-            className={cn("p-1.5 rounded hover:bg-hover transition-colors", alwaysOnTop && "text-twitch")}
-            title="Always on top"
-          >
-            {alwaysOnTop ? <Pin className="w-4 h-4" /> : <PinOff className="w-4 h-4" />}
-          </button>
-        </div>
-      </header>
+            {userInfo?.stream && (
+              <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                LIVE
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              className={cn("p-1.5 rounded hover:bg-hover transition-colors", isChatOpen && "text-twitch")}
+              title="Toggle chat"
+            >
+              <MessageSquare className="w-4 h-4" />
+            </button>
+            <button
+              onClick={toggleAlwaysOnTop}
+              className={cn("p-1.5 rounded hover:bg-hover transition-colors", alwaysOnTop && "text-twitch")}
+              title="Always on top"
+            >
+              {alwaysOnTop ? <Pin className="w-4 h-4" /> : <PinOff className="w-4 h-4" />}
+            </button>
+          </div>
+        </header>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 bg-base flex flex-col relative overflow-hidden">
