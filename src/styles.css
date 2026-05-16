@@ -80,6 +80,15 @@ body {
   display: none;
 }
 
+/* Hide scrollbar entirely (no reserved gutter). */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Reserves an 8px gutter so the thumb never overlays content — Windows/Linux
    default scrollbars are non-overlay, unlike macOS. */
 .scrollbar-overlay {

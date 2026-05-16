@@ -46,7 +46,12 @@ export function Sidebar({
         isOpen ? "w-60" : "w-12"
       )}
     >
-      <div className="p-3 flex items-center justify-between">
+      <div
+        className={cn(
+          "p-3 flex items-center",
+          isOpen ? "justify-between" : "justify-center"
+        )}
+      >
         {isOpen && (
           <span className="font-bold text-[13px] uppercase tracking-wide text-muted">
             {activeTab === "following" ? "Followed" : "Top Streams"}
@@ -60,7 +65,12 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-overlay">
+      <div
+        className={cn(
+          "flex-1 overflow-y-auto overflow-x-hidden",
+          isOpen ? "scrollbar-overlay" : "scrollbar-none"
+        )}
+      >
         {activeTab === "following" ? (
           <FollowingList
             channels={followedChannels}
