@@ -38,3 +38,4 @@ src-tauri/gen/schemas
 
 # Claude Code local state
 .claude/
+scripts/sync-windows.sh
