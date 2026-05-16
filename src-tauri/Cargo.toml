@@ -37,6 +37,7 @@ url = "2.5"
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
 tauri-plugin-log = "2.8.0"
+tauri-plugin-updater = "2"
 log = "0.4.29"
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 window-vibrancy = "0.7"

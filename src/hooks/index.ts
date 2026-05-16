@@ -5,3 +5,4 @@ export { useSearch } from "./useSearch";
 export { useTopStreams } from "./useTopStreams";
 export { useUserInfo } from "./useUserInfo";
 export { useWindowFullscreen } from "./useWindowFullscreen";
+export { useUpdater } from "./useUpdater";

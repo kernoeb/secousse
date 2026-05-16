@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
-import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUserInfo, useWindowFullscreen } from "./hooks";
+import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUpdater, useUserInfo, useWindowFullscreen } from "./hooks";
 import { Navbar, Sidebar, StreamGrid, Chat, StreamInfo, BrowseGrid } from "./components";
 import {
   getInitialActiveTab,
@@ -42,6 +42,7 @@ export default function App() {
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
   const chat = useChat(focusedChannel, isLoggedIn);
+  useUpdater();
 
   const setChannels = useCallback((updater: string[] | ((prev: string[]) => string[])) => {
     setChannelsInternal((prev) => {
