@@ -175,9 +175,9 @@ export function Chat({
             <PanelRight className="w-4 h-4" />
           </button>
           <span className="font-bold text-[11px] uppercase tracking-[0.1em] text-muted">Stream Chat</span>
-          <button className="p-1.5 hover:bg-hover rounded-md transition-colors opacity-80 hover:opacity-100">
+          <div className="p-1.5 opacity-80">
             <User className="w-4 h-4" />
-          </button>
+          </div>
         </div>
 
         <VList

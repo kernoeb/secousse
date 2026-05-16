@@ -169,7 +169,7 @@ export function Navbar({
             <LogIn className="w-4 h-4" /> Log In
           </button>
         )}
-        <div className="w-8 h-8 bg-elevated rounded-full flex items-center justify-center overflow-hidden border border-border cursor-pointer">
+        <div className="w-8 h-8 bg-elevated rounded-full flex items-center justify-center overflow-hidden border border-border">
           {isLoggedIn && selfInfo?.profileImageURL ? (
             <img src={selfInfo.profileImageURL} alt="My profile" className="w-full h-full object-cover" />
           ) : (
