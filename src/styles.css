@@ -79,3 +79,35 @@ body {
 .scrollbar-hidden::-webkit-scrollbar {
   display: none;
 }
+
+/* Reserves an 8px gutter so the thumb never overlays content — Windows/Linux
+   default scrollbars are non-overlay, unlike macOS. */
+.scrollbar-overlay {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+}
+
+.scrollbar-overlay:hover,
+.scrollbar-overlay:focus-within {
+  scrollbar-color: var(--color-elevated) transparent;
+}
+
+.scrollbar-overlay::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollbar-overlay::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 4px;
+  transition: background-color 200ms ease;
+}
+
+.scrollbar-overlay:hover::-webkit-scrollbar-thumb,
+.scrollbar-overlay:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--color-elevated);
+}
+
+.scrollbar-overlay::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-hover);
+}

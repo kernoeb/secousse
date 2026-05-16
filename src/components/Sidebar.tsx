@@ -60,7 +60,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-overlay">
         {activeTab === "following" ? (
           <FollowingList
             channels={followedChannels}
