@@ -339,6 +339,7 @@ export default function App() {
           isLoggedIn={isLoggedIn}
           isConnected={chat.isConnected}
           onSendMessage={chat.sendMessage}
+          isFullscreen={isFullscreen}
         />
       </div>
     </div>

@@ -22,6 +22,7 @@ interface ChatProps {
   isLoggedIn: boolean;
   isConnected: boolean;
   onSendMessage: (message: string) => void;
+  isFullscreen?: boolean;
 }
 
 export function Chat({
@@ -34,6 +35,7 @@ export function Chat({
   isLoggedIn,
   isConnected,
   onSendMessage,
+  isFullscreen = false,
 }: ChatProps) {
   const [chatInput, setChatInput] = useState("");
   const [isFollowing, setIsFollowing] = useState(true);
@@ -243,7 +245,10 @@ export function Chat({
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="absolute right-4 top-16 bg-twitch hover:bg-twitch-dark p-2 rounded-md z-40 transition-all"
+          className={cn(
+            "absolute right-4 bg-twitch hover:bg-twitch-dark p-2 rounded-md z-40 transition-all",
+            isFullscreen ? "top-4" : "top-16",
+          )}
           title="Open chat"
         >
           <PanelLeft className="w-5 h-5 text-white" />
