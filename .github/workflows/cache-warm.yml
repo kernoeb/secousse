@@ -1,0 +1,77 @@
+name: Warm Rust cache
+
+# Builds src-tauri/ on the default branch so the cache lives on
+# refs/heads/main. Release workflows running on a tag can then read it via
+# fallback. Without this, each tag's cache is scope-isolated and the release
+# build re-downloads ~900 MiB of crates every time (see GHA cache scoping).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/cache-warm.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: cache-warm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: ""
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: windows-latest
+            target: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            libxdo-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # tauri-build reads tauri.conf.json's frontendDist; a stub is enough to
+      # satisfy it. We're not bundling, just compiling crates to populate
+      # ~/.cargo/registry + src-tauri/target.
+      - name: Stub frontend dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          printf '<!doctype html><html></html>' > dist/index.html
+
+      - name: Build Rust workspace
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --target "${{ matrix.target }}"
+          else
+            cargo build --release
+          fi
