@@ -8,7 +8,7 @@ An open-source alternative Twitch desktop client, built with Tauri 2, React, Typ
 
 ## Features
 
-- **Live Stream Playback** - HLS video streaming with quality selection
+- **Live Stream Playback** - HLS video streaming with quality selection and low-latency mode (~3-4s behind live, parity with Twitch web)
 - **Multi-stream Grid** - Watch up to 4 streams at once in a split-screen layout; audio routes to the focused tile
 - **Pop-out Windows** - Detach any stream into an independent window with optional always-on-top
 - **Chat** - Real-time chat with emote support (Twitch, 7TV, BTTV, FFZ)
@@ -21,7 +21,7 @@ An open-source alternative Twitch desktop client, built with Tauri 2, React, Typ
 
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, Vite
 - **Backend**: Rust with Tauri 2
-- **Video**: HLS.js with custom Tauri loader for CORS bypass
+- **Video**: HLS.js with a custom Tauri loader for CORS bypass, progressive chunked-transfer playback, and Twitch's proprietary `EXT-X-TWITCH-PREFETCH` low-latency tag
 - **Chat**: IRC WebSocket connection
 - **APIs**: Twitch GQL (public data) + Helix API (authenticated operations)
 

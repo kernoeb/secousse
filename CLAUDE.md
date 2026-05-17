@@ -32,7 +32,7 @@ bun run bump          # Bump version in package.json + Cargo.toml + tauri.conf.j
 - `src/hooks/` — `useAuth`, `useChat`, `useEmotes`, `useSearch`, `useTopStreams`, `useUserInfo` (per-channel `get_user_info` poller; each `StreamGridTile` and `PopoutApp` instantiates its own).
 - `src/lib/utils.ts` — localStorage persistence helpers, viewer-count formatter, `cn()`, `AUTO_QUALITY` sentinel, `getPopoutChannel()`, `GRID_MAX_TILES`.
 - `src/lib/spamSim.ts` — dev-only chat spam simulator (see "Dev tooling" below).
-- `src/TauriHlsLoader.ts` — custom HLS.js loader using `@tauri-apps/plugin-http`.
+- `src/TauriHlsLoader.ts` — custom progressive HLS.js loader using `@tauri-apps/plugin-http`, with Twitch low-latency prefetch promotion (see "HLS streaming" below).
 - `src/types.ts` — all shared TS types (Twitch GQL/Helix shapes, chat, emotes, UI state).
 
 ## Architecture
@@ -56,6 +56,15 @@ bun run bump          # Bump version in package.json + Cargo.toml + tauri.conf.j
 - Helix API (authenticated, app client ID + OAuth token) — self info, followed channels, follow/unfollow, Twitch emotes.
 
 **HLS streaming bypasses CORS** via `src/TauriHlsLoader.ts` — a custom HLS.js loader that routes segment/manifest fetches through `@tauri-apps/plugin-http` (native HTTP, no browser CORS restrictions). The plugin is configured with the `unsafe-headers` Cargo feature in `src-tauri/Cargo.toml`; without it, Twitch's HLS edge silently strips Origin/Referer/User-Agent headers and rejects the request.
+
+**HLS low-latency parity with Twitch web** combines three things in `TauriHlsLoader.ts`:
+1. **Progressive segment loading.** Segment fetches stream chunks via `ReadableStream.getReader()` and emit each chunk through hls.js' `onProgress` callback. The transmuxer parses and feeds MSE as bytes arrive instead of waiting for the full segment. To enable this with a custom loader, `VideoPlayer.tsx` sets `hls.config.progressive = true` *after* the `new Hls(...)` call — hls.js' `enableStreamingMode()` would otherwise force it back to `false` whenever a non-default loader is registered.
+2. **`promotePrefetches()` playlist rewrite.** Twitch's `#EXT-X-TWITCH-PREFETCH:URL` tag (their proprietary low-latency mechanism, not standard LL-HLS) announces future segment URLs while the encoder is still producing them; the CDN serves them via HTTP chunked transfer encoding. hls.js ignores the tag, so the loader rewrites each prefetch line into a standard `#EXTINF:dur,live\nURL` pair before handing the playlist to hls.js. The first byte of a prefetch arrives ~30 ms after the request; the rest streams over ~2 s of remaining encode time. When the same URL graduates to a past `#EXTINF` on the next playlist refresh, hls.js' media-sequence dedup prevents a re-fetch.
+3. **TTFB-correct stats.** `stats.loading.first` is set right after `await fetch()` returns (headers received, body not yet read), not after `arrayBuffer()`. The previous behavior had `first === end`, which fed the full transfer duration to hls.js' TTFB estimator and inflated bandwidth estimates so ABR pinned to the top level regardless of link capacity.
+
+Do **not** enable `lowLatencyMode: true` in the Hls config — it expects standard LL-HLS markers (`#EXT-X-PART-INF`) that Twitch doesn't emit, and activates aggressive catch-up seeks that cause `bufferStalledError` on the slightest segment variance.
+
+**AbortController lifecycle in `TauriHlsLoader`.** Each `doFetch()` owns a fresh `AbortController` stored as `currentAbort`. The reference is cleared (via `releaseAbort(abort)`) the moment a body is fully consumed — at that point plugin-http has already released the Rust-side response resource. Without the clear, a later `loader.abort()` (from a channel switch or destroy) would call `dropBody()` on a freed `rid`, producing "resource id N is invalid" unhandled rejections (one per segment). `releaseAbort` uses an identity check (`if (this.currentAbort === abort)`) to guard a narrow race where a fetch completes after an external `load()` has already replaced the controller.
 
 **Chat uses raw IRC over WebSocket** (`src-tauri/src/chat.rs`). Connects to `wss://irc-ws.chat.twitch.tv:443`, parses PRIVMSG/NOTICE tags, emits structured events to frontend. Keepalive PING every 30s. Frontend auto-reconnects after 2s on `chat-disconnected`. `useChat` dedupes by IRC `id` tag (LRU of 500) and falls back to a monotonic counter for messages with no id (rare). The message buffer is capped at 300.
 

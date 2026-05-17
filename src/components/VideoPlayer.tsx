@@ -108,17 +108,28 @@ export function VideoPlayer({
           hlsRef.current.destroy();
         }
 
+        // Twitch doesn't speak standard LL-HLS (no EXT-X-PART-INF in the
+        // manifest); their low-latency mechanism is the proprietary
+        // EXT-X-TWITCH-PREFETCH tag combined with chunked transfer encoding.
+        // Setting lowLatencyMode: true here was misleading hls.js into LL-HLS
+        // expectations that never matched the wire. We rely instead on
+        // TauriHlsLoader's streaming path (Phase 1) — the transmuxer parses
+        // bytes as they arrive on past EXTINF segments too. Phase 2 (playlist
+        // rewrite of EXT-X-TWITCH-PREFETCH) brings actual sub-segment latency.
         const hls = new Hls({
-          lowLatencyMode: true,
           loader: TauriHlsLoader,
           enableWorker: true,
-          backBufferLength: 10,
-          liveSyncDuration: 3,
-          liveMaxLatencyDuration: 8,
-          liveSyncOnStallIncrease: 1,
-          highBufferWatchdogPeriod: 1,
+          backBufferLength: 30,
+          liveSyncDuration: 4,
+          liveMaxLatencyDuration: 15,
           abrEwmaDefaultEstimate: 5_000_000,
         });
+        // hls.js' enableStreamingMode() flips progressive back to false when
+        // a custom loader is registered (config.ts safety guard). Set it
+        // after construction so base-stream-controller passes a progress
+        // callback to fragmentLoader.load(), letting our chunks reach the
+        // transmuxer instead of being held until onSuccess.
+        hls.config.progressive = true;
 
         let errorLogCount = 0;
         hls.on(Hls.Events.ERROR, (_event, data) => {
