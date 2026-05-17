@@ -6,6 +6,7 @@ import type { ChatMessage, TwitchBadge } from "../types";
 import { EmoteImg } from "./EmoteImg";
 
 const VLIST_STYLE: React.CSSProperties = { padding: 12 };
+const ASIDE_STYLE: React.CSSProperties = { contain: "layout style paint" };
 
 // Tolerance for re-engaging follow-bottom: once the user scrolls within
 // this many px of the bottom, snap back to following live messages.
@@ -161,6 +162,7 @@ export function Chat({
     <>
       <aside
         ref={containerRef}
+        style={ASIDE_STYLE}
         className={cn(
           "bg-surface border-l border-border flex flex-col z-30 transition-all duration-300 relative",
           isOpen ? "w-[340px]" : "w-0 overflow-hidden"

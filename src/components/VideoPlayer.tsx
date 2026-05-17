@@ -17,6 +17,8 @@ import {
 } from "../lib/utils";
 import type { UserInfo, QualityLevel } from "../types";
 
+const VIDEO_STYLE: React.CSSProperties = { transform: "translateZ(0)" };
+
 interface VideoPlayerProps {
   channel: string;
   userInfo: UserInfo | null;
@@ -314,6 +316,7 @@ export function VideoPlayer({
     <div className="flex-1 relative bg-black group min-h-0 min-w-0 overflow-hidden">
       <video
         ref={videoRef}
+        style={VIDEO_STYLE}
         className="w-full h-full object-contain shadow-2xl"
         autoPlay
         playsInline

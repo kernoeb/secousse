@@ -4,6 +4,8 @@ import { VideoPlayer } from "./VideoPlayer";
 import { ChannelActionButtons } from "./ChannelActionButtons";
 import { cn } from "../lib/utils";
 
+const TILE_STYLE: React.CSSProperties = { contain: "layout style paint" };
+
 interface StreamGridProps {
   channels: string[];
   focusedIndex: number;
@@ -95,6 +97,7 @@ function StreamGridTile({
 
   return (
     <div
+      style={TILE_STYLE}
       className={cn(
         "group relative overflow-hidden bg-black flex flex-col",
         isMulti && isFocused && "ring-2 ring-twitch ring-inset"
