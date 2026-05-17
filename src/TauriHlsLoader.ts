@@ -70,6 +70,14 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
       const res = await fetch(this.context.url, { signal, headers: HLS_HEADERS });
       if (signal.aborted) return;
 
+      // TTFB sample for hls.js: headers received here, body not yet read.
+      // Previously `loading.first` was set after the full body arrived, so
+      // `first === end`. hls.js then fed the total transfer time to its
+      // TTFB estimator and computed `processingMs = total - ~total ≈ 0`,
+      // which inflated the bandwidth estimate and pinned ABR to the top
+      // level regardless of actual link capacity.
+      this.stats.loading.first = performance.now();
+
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         info(`[HlsLoader] HTTP ${res.status} on ${urlTail}: ${body.slice(0, 80)}`);
@@ -89,12 +97,11 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
       const size = isText ? (data as string).length : buf.byteLength;
 
       const now = performance.now();
-      this.stats.loading.first ||= now;
       this.stats.loading.end = now;
       this.stats.loaded = size;
       this.stats.total = size;
       this.stats.parsing = { start: now, end: now };
-      this.stats.buffering = { start: now, first: now, end: now };
+      this.stats.buffering = { start: this.stats.loading.first, first: this.stats.loading.first, end: now };
 
       this.callbacks?.onSuccess({ url: this.context.url, data }, this.stats, this.context, undefined);
     } catch (e) {
