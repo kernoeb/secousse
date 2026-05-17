@@ -160,7 +160,6 @@ export function VideoPlayer({
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           info(`[VideoPlayer] manifest parsed: ${hls.levels.length} levels`);
-          setIsLoadingStream(false);
 
           const levels = hls.levels.map((level, index) => ({
             id: index,
@@ -207,10 +206,15 @@ export function VideoPlayer({
         const onWaiting = () => info(`[VideoPlayer] <video> waiting readyState=${video.readyState}`);
         const onStalled = () => info(`[VideoPlayer] <video> stalled`);
         const onVideoError = () => info(`[VideoPlayer] <video> error code=${video.error?.code} msg=${video.error?.message}`);
+        // First decoded frame — that's when the black screen actually ends.
+        // MANIFEST_PARSED is too early with the progressive loader: the loader
+        // disappears but no frame has been demuxed/decoded yet.
+        const onLoadedData = () => setIsLoadingStream(false);
         video.addEventListener("playing", onPlaying);
         video.addEventListener("waiting", onWaiting);
         video.addEventListener("stalled", onStalled);
         video.addEventListener("error", onVideoError);
+        video.addEventListener("loadeddata", onLoadedData);
         // Cleanup: hls destroy already in outer return, listeners are attached
         // to a video element that React keeps mounted across pin cycles, so
         // remove them when the loader effect re-runs.
@@ -219,6 +223,7 @@ export function VideoPlayer({
           video.removeEventListener("waiting", onWaiting);
           video.removeEventListener("stalled", onStalled);
           video.removeEventListener("error", onVideoError);
+          video.removeEventListener("loadeddata", onLoadedData);
         };
         // Stash the cleanup so the outer effect's return can call it.
         listenersCleanupRef.current = cleanupListeners;
