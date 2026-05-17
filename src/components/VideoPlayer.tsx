@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { debug, info, error as logError } from "@tauri-apps/plugin-log";
 import { Play, Pause, Volume2, VolumeX, Settings, Maximize, Minimize, Loader2 } from "lucide-react";
 import { TauriHlsLoader } from "../TauriHlsLoader";
+import { useIdleTimer } from "../hooks";
 import {
   cn,
   formatViewers,
@@ -50,6 +51,9 @@ export function VideoPlayer({
   const [currentQuality, setCurrentQuality] = useState<number>(AUTO_QUALITY);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isLoadingStream, setIsLoadingStream] = useState(true);
+  const { isActive, markActive, reset: resetIdle } = useIdleTimer(2500);
+
+  const showOverlay = isActive || isPaused || showQualityMenu;
 
   useEffect(() => { setIsLoadingStream(true); }, [channel]);
   useEffect(() => {
@@ -324,7 +328,14 @@ export function VideoPlayer({
   }
 
   return (
-    <div className="flex-1 relative bg-black group min-h-0 min-w-0 overflow-hidden">
+    <div
+      className={cn(
+        "flex-1 relative bg-black min-h-0 min-w-0 overflow-hidden",
+        !showOverlay && "cursor-none"
+      )}
+      onMouseMove={markActive}
+      onMouseLeave={resetIdle}
+    >
       <video
         ref={videoRef}
         style={VIDEO_STYLE}
@@ -362,7 +373,10 @@ export function VideoPlayer({
       )}
 
       {userInfo?.stream && (
-        <div className="absolute top-4 left-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className={cn(
+          "absolute top-4 left-4 flex items-center gap-2 transition-opacity",
+          showOverlay ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}>
           <div className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
             <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
             LIVE
@@ -374,7 +388,10 @@ export function VideoPlayer({
       )}
 
       {/* Video Controls Overlay */}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className={cn(
+        "absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 transition-opacity",
+        showOverlay ? "opacity-100" : "opacity-0 pointer-events-none"
+      )}>
         <div className="flex items-center gap-1">
           {/* Play/Pause Button */}
           <button onClick={togglePlayPause} className="p-2 hover:bg-white/20 rounded transition-colors">

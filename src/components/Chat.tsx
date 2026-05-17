@@ -23,6 +23,7 @@ interface ChatProps {
   isConnected: boolean;
   onSendMessage: (message: string) => void;
   isFullscreen?: boolean;
+  openButtonVisible?: boolean;
 }
 
 export function Chat({
@@ -36,6 +37,7 @@ export function Chat({
   isConnected,
   onSendMessage,
   isFullscreen = false,
+  openButtonVisible = true,
 }: ChatProps) {
   const [chatInput, setChatInput] = useState("");
   const [isFollowing, setIsFollowing] = useState(true);
@@ -248,6 +250,7 @@ export function Chat({
           className={cn(
             "absolute right-4 bg-twitch hover:bg-twitch-dark p-2 rounded-md z-40 transition-all",
             isFullscreen ? "top-4" : "top-16",
+            openButtonVisible ? "opacity-100" : "opacity-0 pointer-events-none",
           )}
           title="Open chat"
         >

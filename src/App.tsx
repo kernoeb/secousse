@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useDeferredValue } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
-import { useAuth, useChat, useEmotes, useSearch, useTopStreams, useUpdater, useUserInfo, useWindowFullscreen } from "./hooks";
+import { useAuth, useChat, useEmotes, useIdleTimer, useSearch, useTopStreams, useUpdater, useUserInfo, useWindowFullscreen } from "./hooks";
 import { Navbar, Sidebar, StreamGrid, Chat, StreamInfo, BrowseGrid } from "./components";
 import {
   getInitialActiveTab,
@@ -41,6 +41,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpenInternal] = useState(getInitialSidebarOpen);
   const [isChatOpen, setIsChatOpenInternal] = useState(getInitialChatOpen);
   const [isFullscreen, setIsFullscreen] = useWindowFullscreen();
+
+  const { isActive: isPointerActive, markActive: markPointerActive, reset: resetPointerActive } = useIdleTimer(2500);
 
   const { isLoggedIn, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
@@ -273,7 +275,11 @@ export default function App() {
         />
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      <div
+        className="flex flex-1 overflow-hidden"
+        onMouseMove={markPointerActive}
+        onMouseLeave={resetPointerActive}
+      >
         {!isFullscreen && (
           <Sidebar
             isOpen={isSidebarOpen}
@@ -340,6 +346,7 @@ export default function App() {
           isConnected={chat.isConnected}
           onSendMessage={chat.sendMessage}
           isFullscreen={isFullscreen}
+          openButtonVisible={isPointerActive}
         />
       </div>
     </div>
