@@ -15,6 +15,7 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   const [isConnected, setIsConnected] = useState(false);
   const currentChannelRef = useRef<string | null>(null);
   const connectingRef = useRef<string | null>(null);
+  const reconnectingRef = useRef<string | null>(null);
 
   // Track seen message IDs to prevent duplicates
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -107,19 +108,25 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       const disconnectedChannel = event.payload;
       info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
 
-      if (disconnectedChannel === channel) {
-        setIsConnected(false);
-        info("[useChat] Attempting to reconnect...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      if (cancelled || disconnectedChannel !== channel) return;
+      // Coalesce duplicates: single-slot Rust chat means parallel reconnects cascade.
+      if (reconnectingRef.current === disconnectedChannel) return;
+      reconnectingRef.current = disconnectedChannel;
 
-        if (disconnectedChannel === channel) {
-          try {
-            await invoke("connect_to_chat", { channel });
-            setIsConnected(true);
-            info("[useChat] Successfully reconnected");
-          } catch (err) {
-            logError(`[useChat] Failed to reconnect: ${err}`);
-          }
+      setIsConnected(false);
+      info("[useChat] Attempting to reconnect...");
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        if (cancelled || disconnectedChannel !== channel) return;
+        await invoke("connect_to_chat", { channel });
+        if (cancelled) return;
+        setIsConnected(true);
+        info("[useChat] Successfully reconnected");
+      } catch (err) {
+        logError(`[useChat] Failed to reconnect: ${err}`);
+      } finally {
+        if (reconnectingRef.current === disconnectedChannel) {
+          reconnectingRef.current = null;
         }
       }
     }).then((fn) => {

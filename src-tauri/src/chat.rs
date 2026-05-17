@@ -89,15 +89,13 @@ pub async fn connect_chat(
                 }
                 Err(e) => {
                     error!("[Chat] Read error: {}", e);
-                    // Emit disconnect event so frontend can reconnect
-                    let _ = window_clone.emit("chat-disconnected", channel_clone.clone());
                     break;
                 }
                 _ => {}
             }
         }
         info!("[Chat] Read loop ended for #{}", channel_clone);
-        // Emit disconnect event
+        // Single emit point — frontend treats duplicates as fresh disconnects.
         let _ = window_clone.emit("chat-disconnected", channel_clone.clone());
     });
 
