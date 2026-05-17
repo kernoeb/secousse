@@ -18,7 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  warm:
+  # Job name MUST stay "build" to match release.yml — Swatinem/rust-cache
+  # injects the job name into the cache key (add-job-id-key: true). A
+  # different job name produces a different key, defeating the fallback.
+  build:
     strategy:
       fail-fast: false
       matrix:
