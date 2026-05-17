@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useDeferredValue } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
@@ -29,8 +29,12 @@ export default function App() {
   });
 
   const focusedChannel = channels[focusedIndex] ?? null;
+  // Heavy consumers (chat list, stream info fetch, sidebar highlight) read this
+  // deferred copy. The StreamGrid keeps the urgent focusedIndex so the ring +
+  // audio swap stays immediate on click — the chat/info swap glides in after.
+  const deferredFocusedChannel = useDeferredValue(focusedChannel);
 
-  const { userInfo } = useUserInfo(focusedChannel);
+  const { userInfo } = useUserInfo(deferredFocusedChannel);
   const [isFollowing, setIsFollowing] = useState(false);
 
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(getInitialActiveTab);
@@ -41,7 +45,7 @@ export default function App() {
   const { isLoggedIn, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
-  const chat = useChat(focusedChannel, isLoggedIn);
+  const chat = useChat(deferredFocusedChannel, isLoggedIn);
   useUpdater();
 
   const setChannels = useCallback((updater: string[] | ((prev: string[]) => string[])) => {
@@ -275,7 +279,7 @@ export default function App() {
             isOpen={isSidebarOpen}
             setIsOpen={setIsSidebarOpen}
             activeTab={activeTab}
-            currentChannel={focusedChannel}
+            currentChannel={deferredFocusedChannel}
             gridChannels={channels}
             canAddToGrid={canAddMoreTiles}
             onSelectChannel={selectChannel}
@@ -301,9 +305,9 @@ export default function App() {
                 isFullscreen={isFullscreen}
                 setIsFullscreen={setIsFullscreen}
               />
-              {!isFullscreen && focusedChannel && (
+              {!isFullscreen && deferredFocusedChannel && (
                 <StreamInfo
-                  channel={focusedChannel}
+                  channel={deferredFocusedChannel}
                   userInfo={userInfo}
                   isFollowing={isFollowing}
                   isLoggedIn={isLoggedIn}
