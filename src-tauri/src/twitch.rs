@@ -10,7 +10,7 @@ pub const GQL_CLIENT_ID: &str = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp";
 // Redirect URI: http://localhost:17563
 pub const CLIENT_ID: &str = "jm293pd1wulfgmdfb8lsw2nkjp2717";
 pub const HELIX_API_URL: &str = "https://api.twitch.tv/helix";
-pub const GQL_URL: &str = "https://gql.twitch.tv/gql/";
+pub const GQL_URL: &str = "https://gql.twitch.tv/gql";
 pub const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 #[derive(Debug, Serialize, Deserialize)]
