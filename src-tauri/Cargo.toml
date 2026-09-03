@@ -1,6 +1,6 @@
 [package]
 name = "secousse"
-version = "0.3.5"
+version = "0.3.6"
 description = "An open-source streaming client for Twitch"
 authors = ["kernoeb"]
 edition = "2021"
