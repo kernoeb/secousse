@@ -116,10 +116,9 @@ export function VideoPlayer({
         // manifest); their low-latency mechanism is the proprietary
         // EXT-X-TWITCH-PREFETCH tag combined with chunked transfer encoding.
         // Setting lowLatencyMode: true here was misleading hls.js into LL-HLS
-        // expectations that never matched the wire. We rely instead on
-        // TauriHlsLoader's streaming path (Phase 1) — the transmuxer parses
-        // bytes as they arrive on past EXTINF segments too. Phase 2 (playlist
-        // rewrite of EXT-X-TWITCH-PREFETCH) brings actual sub-segment latency.
+        // expectations that never matched the wire. The latency win comes from
+        // promotePrefetches() in TauriHlsLoader, which starts the fetch of a
+        // segment while the encoder is still producing it.
         const hls = new Hls({
           loader: TauriHlsLoader,
           enableWorker: true,
@@ -127,14 +126,29 @@ export function VideoPlayer({
           liveSyncDuration: 4,
           liveMaxLatencyDuration: 15,
           abrEwmaDefaultEstimate: 5_000_000,
+          // Twitch signs every EXT-X-TWITCH-PREFETCH URL separately, so a
+          // prefetch we promoted to an EXTINF segment reappears in the next
+          // playlist under a different path at the same media sequence
+          // number. hls.js reads that as "media sequence mismatch" and raises
+          // a non-fatal levelParsingError on every refresh, and that error
+          // path returns before arming the live reload timer, so refreshes
+          // degrade to error-retry backoff. The flag only silences the event:
+          // mapFragmentIntersection still bails at the prefetch tail, so the
+          // merge stays incomplete.
+          ignorePlaylistParsingErrors: true,
         });
-        // hls.js' enableStreamingMode() flips progressive back to false when
-        // a custom loader is registered (config.ts safety guard). Set it
-        // after construction so base-stream-controller passes a progress
-        // callback to fragmentLoader.load(), letting our chunks reach the
-        // transmuxer instead of being held until onSuccess.
-        hls.config.progressive = true;
-
+        // Progressive (chunk-by-chunk) segment feeding stays OFF. hls.js'
+        // enableStreamingMode() refuses it for custom loaders, and measuring
+        // it against Twitch proved that refusal right: Twitch now ships fMP4
+        // segments, and feeding them to the transmuxer in pieces produced
+        // fragments whose parsed duration was almost never the 2.000s the
+        // playlist declares. The mis-timed appends shattered the buffer into
+        // up to 9 ranges, and the player then spent its time seeking over
+        // holes it had just created. Measured over three matched pairs of
+        // 130s runs: progressive on gave 8-20 buffer errors per run and a
+        // median 5.9s latency, progressive off gave 0-1 errors, every
+        // fragment at the declared 2.000s, and a median 4.4s latency. It is
+        // slower, not faster — the stalls cost more than the head start.
         let errorLogCount = 0;
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (errorLogCount < 6) {
@@ -207,8 +221,8 @@ export function VideoPlayer({
         const onStalled = () => info(`[VideoPlayer] <video> stalled`);
         const onVideoError = () => info(`[VideoPlayer] <video> error code=${video.error?.code} msg=${video.error?.message}`);
         // First decoded frame — that's when the black screen actually ends.
-        // MANIFEST_PARSED is too early with the progressive loader: the loader
-        // disappears but no frame has been demuxed/decoded yet.
+        // MANIFEST_PARSED is too early: the spinner disappears but no frame
+        // has been demuxed and decoded yet.
         const onLoadedData = () => setIsLoadingStream(false);
         video.addEventListener("playing", onPlaying);
         video.addEventListener("waiting", onWaiting);

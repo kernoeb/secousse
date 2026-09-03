@@ -22,15 +22,17 @@ const HLS_HEADERS = {
 // encoding. CDN serves them via chunked transfer, streaming bytes as the
 // encoder produces them. hls.js doesn't understand the tag, so rewrite each
 // `#EXT-X-TWITCH-PREFETCH:URL` into a standard `#EXTINF:dur,live\nURL` pair.
-// The progressive loader (handleStreamingSegment) then feeds chunks to the
-// transmuxer as they arrive — first byte at ~30ms, full segment over ~2s
-// of remaining encode time. Net result: 3-4s end-to-end latency, on par
-// with Twitch's web player.
+// The win is starting the request early: the first byte arrives ~30ms in and
+// the CDN streams the rest over the ~2s of remaining encode time, so the
+// segment is in hand as soon as it exists. The bytes are still handed to
+// hls.js as one complete segment — see the progressive note in VideoPlayer
+// for why feeding them in pieces measured worse.
 //
-// Sequence numbering is preserved automatically: when a prefetch URL
-// "graduates" to a past EXTINF on the next playlist refresh, hls.js's
-// media-sequence math aligns the SN, so a segment we already fetched as a
-// prefetch is not re-fetched as a past segment.
+// A promoted prefetch keeps its media sequence number when the same media
+// turns up as a real EXTINF on the next refresh, but NOT its URL: Twitch
+// signs each prefetch separately, so the path differs every time. hls.js
+// compares URLs per sequence number and flags the difference as a playlist
+// error, which is why the player sets `ignorePlaylistParsingErrors`.
 //
 // Returns the input unchanged when the playlist has no prefetch tags (e.g.
 // the master playlist, or non-Twitch sources).
@@ -200,12 +202,11 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
     this.callbacks?.onSuccess({ url: this.context.url, data: rewritten }, this.stats, this.context, undefined);
   }
 
-  // Binary segments stream chunk-by-chunk so the transmuxer can start parsing
-  // as soon as bytes arrive. Crucial for Twitch's EXT-X-TWITCH-PREFETCH URLs
-  // which deliver via chunked transfer encoding over ~2s of encoder time —
-  // first chunk arrives at TTFB (~30ms), full segment over the segment duration.
-  // For past EXTINF segments (already encoded) it's still a small win: the
-  // demuxer can start before the last chunk lands.
+  // Reads the body chunk-by-chunk so `stats.loaded` tracks a Twitch prefetch
+  // as its chunked-transfer response trickles in over the encoder's remaining
+  // ~2s, which keeps hls.js' bandwidth estimate honest. Chunks are handed on
+  // individually only when hls.js asks for progress (config.progressive);
+  // otherwise they are joined and delivered once, complete.
   private async handleStreamingSegment(res: Response, urlTail: string, signal: AbortSignal, abort: AbortController) {
     const onProgress = this.callbacks?.onProgress;
 
@@ -218,7 +219,9 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
     }
 
     const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
+    // Only accumulate when nobody is consuming the chunks, since the whole
+    // payload then has to go out through onSuccess instead.
+    const chunks: Uint8Array[] | null = onProgress ? null : [];
     let totalBytes = 0;
 
     try {
@@ -230,7 +233,7 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
           return;
         }
 
-        chunks.push(value);
+        chunks?.push(value);
         totalBytes += value.byteLength;
         this.stats.loaded = totalBytes;
 
@@ -252,25 +255,36 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
       return;
     }
 
+    // Body fully consumed → plugin-http auto-releases the response resource
+    // on the Rust side. Drop our controller reference BEFORE onSuccess to
+    // avoid a sync destroy() call from hls.js firing abort on a freed rid.
+    this.releaseAbort(abort);
+
+    if (!chunks) {
+      // Every byte already reached the transmuxer through onProgress. hls.js'
+      // own fetch loader resolves the progressive path with an empty buffer
+      // (see loadProgressively), and base-stream-controller relies on that:
+      // handing it the full segment here makes it demux and append the same
+      // media a second time, which shatters the buffer into ranges and sends
+      // the player chasing holes it just created.
+      this.finalizeSegment(new ArrayBuffer(0), totalBytes);
+      return;
+    }
+
     const full = new Uint8Array(totalBytes);
     let offset = 0;
     for (const c of chunks) {
       full.set(c, offset);
       offset += c.byteLength;
     }
-
-    // Body fully consumed → plugin-http auto-releases the response resource
-    // on the Rust side. Drop our controller reference BEFORE onSuccess to
-    // avoid a sync destroy() call from hls.js firing abort on a freed rid.
-    this.releaseAbort(abort);
-    this.finalizeSegment(full.buffer);
+    this.finalizeSegment(full.buffer, totalBytes);
   }
 
-  private finalizeSegment(data: ArrayBuffer) {
+  private finalizeSegment(data: ArrayBuffer, transferred = data.byteLength) {
     const now = performance.now();
     this.stats.loading.end = now;
-    this.stats.total = data.byteLength;
-    this.stats.loaded = data.byteLength;
+    this.stats.total = transferred;
+    this.stats.loaded = transferred;
     this.stats.parsing = { start: now, end: now };
     this.stats.buffering = { start: this.stats.loading.first, first: this.stats.loading.first, end: now };
 
