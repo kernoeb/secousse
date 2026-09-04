@@ -1,5 +1,7 @@
+import { useEffect, useRef } from "react";
 import { Search, User, LogIn, X } from "lucide-react";
 import { cn, formatViewers } from "../lib/utils";
+import { ChannelActionButtons } from "./ChannelActionButtons";
 import type { SelfInfo, SearchResult, ActiveTab } from "../types";
 
 interface NavbarProps {
@@ -15,6 +17,10 @@ interface NavbarProps {
   showSearchResults: boolean;
   setShowSearchResults: (show: boolean) => void;
   onSelectSearchResult: (result: SearchResult) => void;
+  onAddSearchResultToGrid: (login: string) => void;
+  onOpenSearchResultPopout: (login: string) => void;
+  gridChannels: string[];
+  canAddToGrid: boolean;
   onClearSearch: () => void;
   onSearch: () => void;
   onOpenSidebar: () => void;
@@ -36,6 +42,10 @@ export function Navbar({
   showSearchResults,
   setShowSearchResults,
   onSelectSearchResult,
+  onAddSearchResultToGrid,
+  onOpenSearchResultPopout,
+  gridChannels,
+  canAddToGrid,
   onClearSearch,
   onSearch,
   onOpenSidebar,
@@ -43,6 +53,19 @@ export function Navbar({
   hasTopStreams,
   onGoHome,
 }: NavbarProps) {
+  const searchRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showSearchResults) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!searchRef.current?.contains(e.target as Node)) {
+        setShowSearchResults(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [showSearchResults, setShowSearchResults]);
+
   return (
     <nav className="h-12 border-b border-border flex items-center justify-between px-4 bg-surface-alt z-50">
       <div className="flex items-center gap-4 h-full">
@@ -85,11 +108,15 @@ export function Navbar({
         </button>
       </div>
 
-      <div className="flex-1 max-w-md mx-4 relative">
+      <div ref={searchRef} className="flex-1 max-w-md mx-4 relative">
         <div className="relative group flex">
           <input
             type="text"
             placeholder="Search channels..."
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => searchQuery && setShowSearchResults(true)}
@@ -114,42 +141,54 @@ export function Navbar({
         {/* Search Results Dropdown */}
         {showSearchResults && searchResults.length > 0 && (
           <div className="absolute top-full left-0 right-0 mt-1 bg-elevated border border-border rounded-md shadow-xl z-[60] max-h-96 overflow-y-auto scrollbar-thin">
-            {searchResults.map((result) => (
-              <button
-                key={result.id}
-                onClick={() => onSelectSearchResult(result)}
-                className="w-full flex items-center gap-3 p-3 hover:bg-hover transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded-full overflow-hidden bg-surface flex-shrink-0">
-                  {result.profileImageURL && (
-                    <img src={result.profileImageURL} alt={result.login} className="w-full h-full object-cover" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm truncate">{result.displayName}</div>
-                  {result.stream ? (
-                    <div className="flex items-center gap-2 text-xs text-muted">
-                      <span className="flex items-center gap-1">
-                        <div className="w-2 h-2 bg-red-600 rounded-full" />
-                        {formatViewers(result.stream.viewersCount)}
-                      </span>
-                      <span className="truncate">{result.stream.game?.displayName || "Streaming"}</span>
+            {searchResults.map((result) => {
+              const isInGrid = gridChannels.includes(result.login);
+              return (
+                <div key={result.id} className="relative">
+                  <button
+                    onClick={(e) => {
+                      if (e.shiftKey) {
+                        e.preventDefault();
+                        onAddSearchResultToGrid(result.login);
+                      } else {
+                        onSelectSearchResult(result);
+                      }
+                    }}
+                    className="w-full flex items-center gap-3 p-3 pr-16 hover:bg-hover transition-colors text-left"
+                    title={canAddToGrid ? "Click to play • Shift+click to add to grid" : "Click to play • Shift+click to open in a new window"}
+                  >
+                    <div className="w-10 h-10 rounded-full overflow-hidden bg-surface flex-shrink-0">
+                      {result.profileImageURL && (
+                        <img src={result.profileImageURL} alt={result.login} className="w-full h-full object-cover" />
+                      )}
                     </div>
-                  ) : (
-                    <div className="text-xs text-muted">Offline</div>
-                  )}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-sm truncate">{result.displayName}</div>
+                      {result.stream ? (
+                        <div className="flex items-center gap-2 text-xs text-muted">
+                          <span className="flex items-center gap-1">
+                            <div className="w-2 h-2 bg-red-600 rounded-full" />
+                            {formatViewers(result.stream.viewersCount)}
+                          </span>
+                          <span className="truncate">{result.stream.game?.displayName || "Streaming"}</span>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted">Offline</div>
+                      )}
+                    </div>
+                  </button>
+                  <ChannelActionButtons
+                    variant="row"
+                    canAddToGrid={canAddToGrid}
+                    isInGrid={isInGrid}
+                    onAddToGrid={() => onAddSearchResultToGrid(result.login)}
+                    onOpenPopout={() => onOpenSearchResultPopout(result.login)}
+                    className="absolute top-1/2 right-2 -translate-y-1/2"
+                  />
                 </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
-        )}
-
-        {/* Click outside to close */}
-        {showSearchResults && (
-          <div
-            className="fixed inset-0 z-[55]"
-            onClick={() => setShowSearchResults(false)}
-          />
         )}
       </div>
 

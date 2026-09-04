@@ -260,6 +260,10 @@ export default function App() {
           showSearchResults={search.showResults}
           setShowSearchResults={search.setShowResults}
           onSelectSearchResult={search.selectResult}
+          onAddSearchResultToGrid={addToGrid}
+          onOpenSearchResultPopout={openPopout}
+          gridChannels={channels}
+          canAddToGrid={canAddMoreTiles}
           onClearSearch={search.clearSearch}
           onSearch={() => {}}
           onOpenSidebar={() => setIsSidebarOpen(true)}
