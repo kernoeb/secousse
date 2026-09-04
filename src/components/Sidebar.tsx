@@ -249,7 +249,7 @@ function ChannelItem({
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
 
   const handleClick = (e: React.MouseEvent) => {
-    if (e.shiftKey && !isInGrid) {
+    if (e.shiftKey) {
       e.preventDefault();
       onAddToGrid();
     } else {
