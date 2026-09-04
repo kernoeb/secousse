@@ -1,5 +1,5 @@
 import { useState, useMemo, memo, useRef, useEffect, useCallback } from "react";
-import { PanelRight, PanelLeft, User, Settings, Send } from "lucide-react";
+import { PanelRight, PanelLeft, User, Send } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
 import { cn, twitchEmoteUrl } from "../lib/utils";
 import type { ChatMessage, TwitchBadge } from "../types";
@@ -226,10 +226,7 @@ export function Chat({
               )}
             />
           </div>
-          <div className="flex items-center justify-between">
-            <button className="p-2 hover:bg-hover rounded-md transition-colors group">
-              <Settings className="w-4 h-4 text-muted group-hover:text-[#e8e8ee]" />
-            </button>
+          <div className="flex items-center justify-end">
             <button
               onClick={handleSend}
               disabled={!isLoggedIn || !isConnected || !chatInput.trim()}
