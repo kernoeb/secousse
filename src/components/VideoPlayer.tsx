@@ -46,7 +46,7 @@ export function VideoPlayer({
   const [isPaused, setIsPaused] = useState(false);
   const [isMuted, setIsMuted] = useState(getInitialMuted);
   const [volume, setVolume] = useState(getInitialVolume);
-  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [isVolumeHovered, setIsVolumeHovered] = useState(false);
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [currentQuality, setCurrentQuality] = useState<number>(AUTO_QUALITY);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
@@ -324,6 +324,8 @@ export function VideoPlayer({
     }
   }, [compact]);
 
+  const volumePercent = Math.round((isMuted ? 0 : volume) * 100);
+
   if (userInfo && !userInfo.stream && !isLoadingStream) {
     return (
       <div className="flex-1 relative bg-black min-h-0 min-w-0 overflow-hidden">
@@ -424,9 +426,19 @@ export function VideoPlayer({
           {/* Volume Control */}
           <div
             className="relative flex items-center"
-            onMouseEnter={() => !forceMuted && setShowVolumeSlider(true)}
-            onMouseLeave={() => setShowVolumeSlider(false)}
+            onMouseEnter={() => setIsVolumeHovered(true)}
+            onMouseLeave={() => setIsVolumeHovered(false)}
           >
+            {isVolumeHovered && (
+              <div className="absolute bottom-full left-0 mb-2 px-2 py-1 rounded bg-elevated border border-border text-white text-xs whitespace-nowrap shadow-lg pointer-events-none">
+                {forceMuted
+                  ? "Muted (unfocused tile)"
+                  : isMuted
+                    ? "Muted"
+                    : `Volume ${volumePercent}%`}
+              </div>
+            )}
+
             <button
               onClick={toggleMute}
               disabled={forceMuted}
@@ -439,10 +451,11 @@ export function VideoPlayer({
               )}
             </button>
 
+            {/* py-2 keeps the 12px thumb inside the clip box while the width animates */}
             <div
               className={cn(
-                "flex items-center overflow-hidden transition-all duration-200",
-                showVolumeSlider ? "w-20 opacity-100" : "w-0 opacity-0"
+                "flex items-center overflow-hidden py-2 transition-all duration-200",
+                isVolumeHovered && !forceMuted ? "w-20 opacity-100" : "w-0 opacity-0"
               )}
             >
               <input
