@@ -177,9 +177,10 @@ export interface GetGlobalBadgesResponse {
 
 /** Response from get_channel_badges */
 export interface GetChannelBadgesResponse {
+  /** null when GQL cannot resolve the channel (unknown id, or a transient service error) */
   user: {
     broadcastBadges: TwitchBadge[];
-  };
+  } | null;
 }
 
 /** Response from get_twitch_global_emotes / get_twitch_channel_emotes */

@@ -81,6 +81,16 @@ export function useEmotes(): UseEmotesReturn {
     }
   }
 
+  // One failing source must not discard the ones that loaded.
+  async function invokeChannel<T>(command: string, channelId: string): Promise<T | null> {
+    try {
+      return await invoke<T>(command, { channelId });
+    } catch (err) {
+      logError(`[useEmotes] ${command} failed for ${channelId}: ${err}`);
+      return null;
+    }
+  }
+
   const loadChannelEmotes = useCallback(async (channelId: string) => {
     const cache = channelCacheRef.current;
 
@@ -100,13 +110,13 @@ export function useEmotes(): UseEmotesReturn {
     const promise = (async () => {
       try {
         const [emoteList, badges, twitchEmotes] = await Promise.all([
-          invoke<Emote[]>("get_channel_emotes", { channelId }),
-          invoke<GetChannelBadgesResponse>("get_channel_badges", { channelId }),
-          invoke<GetTwitchEmotesResponse>("get_twitch_channel_emotes", { channelId })
+          invokeChannel<Emote[]>("get_channel_emotes", channelId),
+          invokeChannel<GetChannelBadgesResponse>("get_channel_badges", channelId),
+          invokeChannel<GetTwitchEmotesResponse>("get_twitch_channel_emotes", channelId)
         ]);
 
         const thirdParty = new Map<string, string>();
-        emoteList.forEach(e => thirdParty.set(e.name, e.url));
+        emoteList?.forEach(e => thirdParty.set(e.name, e.url));
 
         const twitch = new Map<string, string>();
         if (twitchEmotes?.data) {
@@ -122,7 +132,7 @@ export function useEmotes(): UseEmotesReturn {
         const entry: ChannelEmoteEntry = {
           thirdParty,
           twitch,
-          badges: badges.user.broadcastBadges,
+          badges: badges?.user?.broadcastBadges ?? [],
         };
 
         if (cache.size >= CHANNEL_CACHE_MAX) {

@@ -421,9 +421,11 @@ impl TwitchClient {
 
         let gql_res = res.json::<GQLResponse<serde_json::Value>>().await?;
         if let Some(data) = gql_res.data {
-            return Ok(data);
+            if !data["user"].is_null() {
+                return Ok(data);
+            }
         }
-        Err(anyhow::anyhow!("GQL Error: {:?}", gql_res.errors))
+        Err(anyhow::anyhow!("Channel badges unavailable: {:?}", gql_res.errors))
     }
 
     pub async fn send_spade_event(&self, channel_login: &str, channel_id: &str, stream_id: &str, user_id: &str) -> Result<()> {
