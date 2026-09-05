@@ -35,31 +35,37 @@ fn apply_dark_titlebar(window: &tauri::WebviewWindow) {
 
 #[cfg(target_os = "macos")]
 fn apply_dark_titlebar(window: &tauri::WebviewWindow) {
-    use cocoa::appkit::{NSColor, NSWindow};
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
+    // AppKit only accepts these from the main thread, and macOS 15 traps
+    // instead of tolerating it. `open_popout` is an async command, so it runs
+    // on a tokio worker and must hop back.
+    let win = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        use cocoa::appkit::{NSColor, NSWindow};
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::NSString;
+        use objc::{class, msg_send, sel, sel_impl};
 
-    let Ok(ns_window_ptr) = window.ns_window() else { return };
-    let ns_window = ns_window_ptr as id;
-    unsafe {
-        // Force NSAppearanceNameDarkAqua so the title bar text stays light
-        // regardless of the user's system appearance. Without this, the title
-        // ("Secousse") renders in default-black against our dark NSColor bg.
-        let name = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
-        let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: name];
-        let _: () = msg_send![ns_window, setAppearance: appearance];
+        let Ok(ns_window_ptr) = win.ns_window() else { return };
+        let ns_window = ns_window_ptr as id;
+        unsafe {
+            // Force NSAppearanceNameDarkAqua so the title bar text stays light
+            // regardless of the user's system appearance. Without this, the title
+            // ("Secousse") renders in default-black against our dark NSColor bg.
+            let name = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
+            let appearance: id = msg_send![class!(NSAppearance), appearanceNamed: name];
+            let _: () = msg_send![ns_window, setAppearance: appearance];
 
-        // #1c1c27 — matches --color-surface-alt (the Navbar background)
-        let bg_color = NSColor::colorWithRed_green_blue_alpha_(
-            nil,
-            28.0 / 255.0,
-            28.0 / 255.0,
-            39.0 / 255.0,
-            1.0,
-        );
-        ns_window.setBackgroundColor_(bg_color);
-    }
+            // #1c1c27 — matches --color-surface-alt (the Navbar background)
+            let bg_color = NSColor::colorWithRed_green_blue_alpha_(
+                nil,
+                28.0 / 255.0,
+                28.0 / 255.0,
+                39.0 / 255.0,
+                1.0,
+            );
+            ns_window.setBackgroundColor_(bg_color);
+        }
+    });
 }
 
 pub struct WatchState {
