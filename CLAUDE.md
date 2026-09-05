@@ -81,6 +81,8 @@ Do **not** enable `lowLatencyMode: true` in the Hls config — it expects standa
 
 **Window creation** is programmatic in `setup()` (not via `tauri.conf.json` window list) so we can apply a transparent macOS title bar and custom NSColor background. The window starts hidden and is shown either when the frontend invokes `show_main_window` (post-paint) or by a 2s safety-fallback timer if the JS never runs. Pop-out windows go through the same `WebviewWindowBuilder` path in the `open_popout` command (transparent title bar on macOS, label `popout-<channel>`, capability glob `popout-*`).
 
+**AppKit must be touched from the main thread.** `apply_dark_titlebar` wraps its `setAppearance:` / `setBackgroundColor_` calls in `window.run_on_main_thread(...)`. `open_popout` is an `async` command, so Tauri runs it on a tokio worker; macOS 15 traps (`EXC_BREAKPOINT`, "Must only be used from the main thread") instead of tolerating the off-thread call, and the whole app dies with SIGTRAP. The `setup()` call site is already on the main thread, so before the fix only the pop-out path crashed. Same rule for any new Cocoa call added from a command handler.
+
 **Logging** goes through `tauri-plugin-log`: stdout + a rotating file in the platform log dir (`~/Library/Logs/<id>` on macOS). Capped at 5 MB with `KeepOne` rotation. Frontend logs via `@tauri-apps/plugin-log` (`info`, `debug`, `error`); `attachConsole()` in `App.tsx` forwards `console.*` calls to the Rust log too.
 
 ## Auto-refresh intervals
