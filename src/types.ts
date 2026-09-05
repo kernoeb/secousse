@@ -94,6 +94,14 @@ export interface ChatMessage {
   channel: string;
   /** Client-side stable key for React. Falls back to a monotonic counter when Twitch's `id` tag is missing. */
   _renderKey?: string;
+  /** Server notice (message refused, room mode changed) rather than a user message. */
+  system?: boolean;
+}
+
+export interface ChatNotice {
+  msg_id: string;
+  message: string;
+  channel: string;
 }
 
 // ============================================

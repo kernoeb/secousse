@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { info, debug, error as logError } from "@tauri-apps/plugin-log";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, ChatNotice } from "../types";
 
 interface UseChatReturn {
   messages: ChatMessage[];
@@ -24,6 +25,13 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   // would otherwise produce duplicate React keys and force a full reconcile).
   const nextKeyRef = useRef(0);
 
+  // Identifies this hook instance to the Rust chat registry. The window label
+  // prefix lets a closed pop-out release everything it held in one sweep.
+  const subscriberRef = useRef<string | null>(null);
+  if (!subscriberRef.current) {
+    subscriberRef.current = `${getCurrentWindow().label}:${crypto.randomUUID()}`;
+  }
+
   // Connect to chat when channel changes
   useEffect(() => {
     if (!channel) {
@@ -35,19 +43,22 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       return;
     }
 
-    // Guard against duplicate connections
-    if (connectingRef.current === channel) {
+    // Guard against duplicate connections. Keyed on the login state too: an
+    // anonymous connection cannot send, so logging in has to rebuild it.
+    const connectKey = `${channel}:${isLoggedIn}`;
+    if (connectingRef.current === connectKey) {
       return;
     }
-    connectingRef.current = channel;
+    connectingRef.current = connectKey;
     setIsConnected(false);
 
     info(`[useChat] Connecting to chat: ${channel}`);
-    currentChannelRef.current = channel;
+    currentChannelRef.current = channel.toLowerCase();
     setMessages([]);
     seenIdsRef.current.clear();
 
-    invoke("connect_to_chat", { channel })
+    const subscriber = subscriberRef.current!;
+    const connected = invoke("connect_to_chat", { channel, subscriber })
       .then(() => {
         setIsConnected(true);
       })
@@ -56,7 +67,18 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
         connectingRef.current = null;
         setIsConnected(false);
       });
-  }, [channel]);
+
+    // Rust keeps the connection alive while another window still subscribes.
+    // Clearing the guard lets a re-run for the same channel reconnect.
+    return () => {
+      connectingRef.current = null;
+      // Chained on the connect: releasing a subscriber Rust has not registered
+      // yet is a no-op, and would leave the connection with an id no window
+      // can ever release.
+      connected.then(() => invoke("disconnect_from_chat", { channel, subscriber }))
+        .catch(err => logError(`[useChat] Failed to disconnect from chat: ${err}`));
+    };
+  }, [channel, isLoggedIn]);
 
   // `listen()` is async: if the cleanup fires before it resolves, the unlisten
   // function would be lost and the listener leaks. We capture the unlisten in a
@@ -69,7 +91,7 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     listen<ChatMessage>("chat-message", (event) => {
       const newMsg = event.payload;
 
-      if (newMsg.channel !== currentChannelRef.current) {
+      if (newMsg.channel.toLowerCase() !== currentChannelRef.current) {
         debug(`[useChat] Ignoring message from #${newMsg.channel}, current is #${currentChannelRef.current}`);
         return;
       }
@@ -104,12 +126,47 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
+    listen<ChatNotice>("chat-notice", (event) => {
+      const notice = event.payload;
+      if (notice.channel.toLowerCase() !== currentChannelRef.current) return;
+
+      info(`[useChat] Notice (${notice.msg_id || "unknown"}): ${notice.message}`);
+      const _renderKey = `notice-${nextKeyRef.current++}`;
+      setMessages((prev) => [...prev, {
+        id: _renderKey,
+        user: "",
+        message: notice.message,
+        badges: [],
+        emotes: [],
+        channel: notice.channel,
+        timestamp: Date.now(),
+        system: true,
+        _renderKey,
+      }].slice(-300));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    // Rust emits the normalized channel, so compare on the same footing.
+    const target = channel?.toLowerCase() ?? null;
+
     listen<string>("chat-disconnected", async (event) => {
-      const disconnectedChannel = event.payload;
+      const disconnectedChannel = event.payload.toLowerCase();
       info(`[useChat] Chat disconnected from: ${disconnectedChannel}`);
 
-      if (cancelled || disconnectedChannel !== channel) return;
-      // Coalesce duplicates: single-slot Rust chat means parallel reconnects cascade.
+      if (cancelled || disconnectedChannel !== target) return;
+      // Coalesce duplicates: the disconnect event is global, so every listener
+      // in this window would otherwise race to rebuild the same connection.
       if (reconnectingRef.current === disconnectedChannel) return;
       reconnectingRef.current = disconnectedChannel;
 
@@ -117,8 +174,8 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       info("[useChat] Attempting to reconnect...");
       try {
         await new Promise(resolve => setTimeout(resolve, 2000));
-        if (cancelled || disconnectedChannel !== channel) return;
-        await invoke("connect_to_chat", { channel });
+        if (cancelled || disconnectedChannel !== target) return;
+        await invoke("connect_to_chat", { channel, subscriber: subscriberRef.current });
         if (cancelled) return;
         setIsConnected(true);
         info("[useChat] Successfully reconnected");
@@ -141,14 +198,14 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   }, [channel]);
 
   const sendMessage = useCallback(async (message: string) => {
-    if (!message.trim() || !isLoggedIn || !isConnected) return;
+    if (!message.trim() || !channel || !isLoggedIn || !isConnected) return;
 
     try {
-      await invoke("send_chat_message", { message: message.trim() });
+      await invoke("send_chat_message", { channel, message: message.trim() });
     } catch (err) {
       logError(`[useChat] Send message error: ${err}`);
     }
-  }, [isLoggedIn, isConnected]);
+  }, [channel, isLoggedIn, isConnected]);
 
   return {
     messages,

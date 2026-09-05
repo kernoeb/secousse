@@ -4,6 +4,7 @@ pub mod emotes;
 pub mod emote_decoder;
 
 use log::{info, debug, error};
+use std::collections::{HashMap, HashSet};
 use tauri::{State, Window, Manager, Emitter};
 use twitch::TwitchClient;
 use tokio::sync::Mutex;
@@ -75,11 +76,31 @@ pub struct WatchState {
     pub user_id: String,
 }
 
+// One IRC connection per channel. A single slot used to be enough, but a
+// pop-out then stole the sender from the main window and its messages went to
+// the wrong channel. Subscribers are ids, not a count, so releasing twice (JS
+// unmount plus window destroy) cannot close a connection someone else still uses.
+pub struct ChatEntry {
+    pub sender: tokio::sync::mpsc::Sender<String>,
+    pub read_task: tokio::task::JoinHandle<()>,
+    pub write_task: tokio::task::JoinHandle<()>,
+    pub subscribers: HashSet<String>,
+    /// An anonymous connection can read but not write: Twitch drops its sends
+    /// without a notice. Logging in mid-session must rebuild it, not reuse it.
+    pub authenticated: bool,
+}
+
+impl ChatEntry {
+    fn abort(&self) {
+        self.read_task.abort();
+        self.write_task.abort();
+    }
+}
+
 pub struct AppState {
     pub twitch_client: Mutex<TwitchClient>,
     pub http_client: reqwest::Client,
-    pub chat_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-    pub chat_sender: Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
+    pub chats: Mutex<HashMap<String, ChatEntry>>,
     pub watch_state: Mutex<Option<WatchState>>,
     pub cached_username: Mutex<Option<String>>,
 }
@@ -211,84 +232,137 @@ async fn get_twitch_channel_emotes(state: State<'_, AppState>, channel_id: Strin
 }
 
 #[tauri::command]
-async fn connect_to_chat(state: State<'_, AppState>, window: Window, channel: String) -> Result<(), String> {
-    // Abort existing chat connection
-    {
-        let mut handle_lock = state.chat_handle.lock().await;
-        if let Some(handle) = handle_lock.take() {
-            handle.abort();
-        }
-    }
-    
-    // Clear existing sender
-    {
-        let mut sender_lock = state.chat_sender.lock().await;
-        *sender_lock = None;
-    }
-    
-    // Get auth info for authenticated chat
+async fn connect_to_chat(
+    state: State<'_, AppState>,
+    window: Window,
+    channel: String,
+    subscriber: String,
+) -> Result<(), String> {
+    let channel = channel.trim().to_lowercase();
+
     let access_token = {
         let client = state.twitch_client.lock().await;
         client.access_token.clone()
     };
-    
-    // If authenticated, get the username (use cache if available)
-    let username: Option<String> = if access_token.is_some() {
-        let cached = state.cached_username.lock().await.clone();
-        if let Some(user) = cached {
-            info!("[connect_to_chat] Using cached username: {}", user);
-            Some(user)
-        } else {
-            let client = state.twitch_client.lock().await.clone();
-            match client.get_self_info().await {
-                Ok(data) => {
-                    let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
-                    info!("[connect_to_chat] Got username from API: {:?}", username);
-                    if let Some(ref user) = username {
-                        *state.cached_username.lock().await = Some(user.clone());
-                    }
-                    username
-                },
-                Err(e) => {
-                    error!("[connect_to_chat] Failed to get self_info: {}", e);
-                    None
-                },
-            }
+    let authenticated = access_token.is_some();
+
+    // Held across the connect below so two windows opening the same channel at
+    // once cannot each build a connection.
+    let mut chats = state.chats.lock().await;
+
+    let reusable = chats.get(&channel)
+        .is_some_and(|e| !e.read_task.is_finished() && e.authenticated == authenticated);
+    if reusable {
+        let entry = chats.get_mut(&channel).expect("checked above");
+        entry.subscribers.insert(subscriber);
+        debug!("[connect_to_chat] Reusing #{} ({} subscribers)", channel, entry.subscribers.len());
+        return Ok(());
+    }
+
+    // Either the socket died or the login state changed. Both mean a rebuild,
+    // and the existing subscribers are waiting for exactly this one.
+    let mut subscribers = match chats.remove(&channel) {
+        Some(stale) => {
+            stale.abort();
+            info!("[connect_to_chat] Rebuilding connection for #{}", channel);
+            stale.subscribers
         }
-    } else {
-        info!("[connect_to_chat] No access_token, connecting anonymously");
-        None
+        None => HashSet::new(),
     };
-    
-    // Connect to chat
-    match chat::connect_chat(channel.clone(), window, access_token, username).await {
-        Ok(connection) => {
-            let mut sender_lock = state.chat_sender.lock().await;
-            *sender_lock = Some(connection.sender);
-            info!("Chat connected to #{}", channel);
+    subscribers.insert(subscriber);
+
+    // Bounded because the map lock is held throughout: neither the self-info
+    // call nor the websocket handshake has a timeout of its own, and a hung one
+    // would freeze chat in every window, closing pop-outs included.
+    let connect = async {
+        // If authenticated, get the username (use cache if available)
+        let username: Option<String> = if authenticated {
+            let cached = state.cached_username.lock().await.clone();
+            if let Some(user) = cached {
+                info!("[connect_to_chat] Using cached username: {}", user);
+                Some(user)
+            } else {
+                let client = state.twitch_client.lock().await.clone();
+                match client.get_self_info().await {
+                    Ok(data) => {
+                        let username = data.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()).map(|s| s.to_string());
+                        info!("[connect_to_chat] Got username from API: {:?}", username);
+                        if let Some(ref user) = username {
+                            *state.cached_username.lock().await = Some(user.clone());
+                        }
+                        username
+                    },
+                    Err(e) => {
+                        error!("[connect_to_chat] Failed to get self_info: {}", e);
+                        None
+                    },
+                }
+            }
+        } else {
+            info!("[connect_to_chat] No access_token, connecting anonymously");
+            None
+        };
+
+        chat::connect_chat(channel.clone(), window, access_token, username).await
+    };
+
+    match tokio::time::timeout(std::time::Duration::from_secs(20), connect).await {
+        Ok(Ok(connection)) => {
+            info!("Chat connected to #{} ({} subscribers)", channel, subscribers.len());
+            chats.insert(channel, ChatEntry {
+                sender: connection.sender,
+                read_task: connection.read_task,
+                write_task: connection.write_task,
+                subscribers,
+                authenticated,
+            });
             Ok(())
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             error!("Chat connection error: {}", e);
             Err(e.to_string())
+        }
+        Err(_) => {
+            error!("[connect_to_chat] Timed out connecting to #{}", channel);
+            Err(format!("Timed out connecting to #{}", channel))
         }
     }
 }
 
 #[tauri::command]
-async fn send_chat_message(state: State<'_, AppState>, message: String) -> Result<(), String> {
-    debug!("[send_chat_message] Attempting to send: {}", message);
-    let sender_lock = state.chat_sender.lock().await;
-    if let Some(sender) = &*sender_lock {
-        debug!("[send_chat_message] Sender found, sending message");
-        sender.send(message).await.map_err(|e| {
-            error!("[send_chat_message] Send error: {}", e);
-            e.to_string()
-        })
-    } else {
-        error!("[send_chat_message] Not connected to chat");
-        Err("Not connected to chat".to_string())
+async fn disconnect_from_chat(state: State<'_, AppState>, channel: String, subscriber: String) -> Result<(), String> {
+    let channel = channel.trim().to_lowercase();
+    let mut chats = state.chats.lock().await;
+
+    let Some(entry) = chats.get_mut(&channel) else { return Ok(()) };
+    entry.subscribers.remove(&subscriber);
+    if !entry.subscribers.is_empty() {
+        debug!("[disconnect_from_chat] #{} still has {} subscribers", channel, entry.subscribers.len());
+        return Ok(());
     }
+
+    if let Some(entry) = chats.remove(&channel) {
+        entry.abort();
+        info!("[disconnect_from_chat] Closed #{}", channel);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_chat_message(state: State<'_, AppState>, channel: String, message: String) -> Result<(), String> {
+    let channel = channel.trim().to_lowercase();
+    debug!("[send_chat_message] Attempting to send to #{}: {}", channel, message);
+
+    let chats = state.chats.lock().await;
+    let Some(entry) = chats.get(&channel) else {
+        error!("[send_chat_message] Not connected to #{}", channel);
+        return Err(format!("Not connected to #{}", channel));
+    };
+
+    entry.sender.send(message).await.map_err(|e| {
+        error!("[send_chat_message] Send error on #{}: {}", channel, e);
+        e.to_string()
+    })
 }
 
 #[tauri::command]
@@ -546,6 +620,29 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // A closed pop-out never runs its React cleanup, so release its chat
+        // subscriptions here or its connections would outlive the window.
+        .on_window_event(|window, event| {
+            if !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            let prefix = format!("{}:", window.label());
+            let app = window.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let mut chats = state.chats.lock().await;
+                chats.retain(|channel, entry| {
+                    entry.subscribers.retain(|s| !s.starts_with(&prefix));
+                    if entry.subscribers.is_empty() {
+                        entry.abort();
+                        info!("[window closed] Closed chat #{}", channel);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            });
+        })
         .setup(|app| {
             // Create window programmatically with full control
             use tauri::WebviewWindowBuilder;
@@ -589,8 +686,7 @@ pub fn run() {
             app.manage(AppState {
                 twitch_client: Mutex::new(client),
                 http_client,
-                chat_handle: Mutex::new(None),
-                chat_sender: Mutex::new(None),
+                chats: Mutex::new(HashMap::new()),
                 watch_state: Mutex::new(None),
                 cached_username: Mutex::new(None),
             });
@@ -643,7 +739,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_stream_url, connect_to_chat, send_chat_message,
+            get_stream_url, connect_to_chat, disconnect_from_chat, send_chat_message,
             get_user_info, get_users_info, get_self_info, get_followed_channels,
             get_channel_emotes, get_global_emotes, get_global_badges, get_channel_badges,
             get_twitch_global_emotes, get_twitch_channel_emotes,

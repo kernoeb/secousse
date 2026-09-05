@@ -266,6 +266,19 @@ interface ChatMessageViewProps {
 }
 
 const ChatMessageView = memo(function ChatMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessageViewProps) {
+  if (msg.system) return <ChatNoticeView msg={msg} />;
+  return <ChatUserMessageView msg={msg} emotes={emotes} badgeIndex={badgeIndex} onImageLoad={onImageLoad} />;
+});
+
+function ChatNoticeView({ msg }: { msg: ChatMessage }) {
+  return (
+    <div className="text-[13px] leading-tight break-words py-0.5 px-2 my-0.5 border-l-2 border-twitch/60 bg-white/[0.03] rounded-sm text-muted italic">
+      {msg.message}
+    </div>
+  );
+}
+
+function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessageViewProps) {
   const badgeUrls = useMemo(() => {
     if (!msg.badges) return [];
     const out: string[] = [];
@@ -328,4 +341,4 @@ const ChatMessageView = memo(function ChatMessageView({ msg, emotes, badgeIndex,
       <span>{parts}</span>
     </div>
   );
-});
+}
