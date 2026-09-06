@@ -11,12 +11,37 @@ import type {
 } from "../types";
 
 const CHANNEL_CACHE_MAX = 5;
+const RETRY_DELAY_MS = 10_000;
+const MAX_RETRIES = 3;
+
+type EmoteSource = "emotes" | "badges" | "twitch";
+
+interface SourceResult<T> {
+  data: T | null;
+  retryable: boolean;
+}
+
+// One failing source must not discard the ones that loaded. A 401 means "not
+// logged in", which no amount of retrying fixes.
+async function invokeChannel<T>(command: string, channelId: string): Promise<SourceResult<T>> {
+  try {
+    return { data: await invoke<T>(command, { channelId }), retryable: false };
+  } catch (err) {
+    const message = String(err);
+    logError(`[useEmotes] ${command} failed for ${channelId}: ${message}`);
+    return { data: null, retryable: !message.includes("401") };
+  }
+}
 
 interface ChannelEmoteEntry {
   thirdParty: Map<string, string>;
   twitch: Map<string, string>;
   badges: TwitchBadge[];
+  // Sources that failed and are worth another try.
+  pending: Set<EmoteSource>;
 }
+
+type FetchChannel = (channelId: string, focus: boolean, force: boolean, attempt: number) => Promise<void>;
 
 interface UseEmotesReturn {
   allEmotes: Map<string, string>;
@@ -35,6 +60,17 @@ export function useEmotes(): UseEmotesReturn {
   const inflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const [focusedChannelId, setFocusedChannelIdInternal] = useState<string | null>(null);
   const [cacheRevision, setCacheRevision] = useState(0);
+  const retryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const unmountedRef = useRef(false);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      retryTimersRef.current.forEach(clearTimeout);
+      retryTimersRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     loadGlobalEmotes();
@@ -81,24 +117,14 @@ export function useEmotes(): UseEmotesReturn {
     }
   }
 
-  // One failing source must not discard the ones that loaded.
-  async function invokeChannel<T>(command: string, channelId: string): Promise<T | null> {
-    try {
-      return await invoke<T>(command, { channelId });
-    } catch (err) {
-      logError(`[useEmotes] ${command} failed for ${channelId}: ${err}`);
-      return null;
-    }
-  }
-
-  const loadChannelEmotes = useCallback(async (channelId: string) => {
+  const fetchChannel = useCallback<FetchChannel>(async (channelId, focus, force, attempt) => {
     const cache = channelCacheRef.current;
 
-    if (cache.has(channelId)) {
+    if (!force && cache.has(channelId)) {
       const entry = cache.get(channelId)!;
       cache.delete(channelId);
       cache.set(channelId, entry);
-      setFocusedChannelIdInternal(channelId);
+      if (focus) setFocusedChannelIdInternal(channelId);
       return;
     }
 
@@ -107,20 +133,29 @@ export function useEmotes(): UseEmotesReturn {
       return existing;
     }
 
+    // A forced run is a retry: refetch only what failed, keep what loaded.
+    const previous = force ? cache.get(channelId) : undefined;
+    const load = <T,>(source: EmoteSource, command: string): Promise<SourceResult<T>> =>
+      !previous || previous.pending.has(source)
+        ? invokeChannel<T>(command, channelId)
+        : Promise.resolve({ data: null, retryable: false });
+
     const promise = (async () => {
       try {
-        const [emoteList, badges, twitchEmotes] = await Promise.all([
-          invokeChannel<Emote[]>("get_channel_emotes", channelId),
-          invokeChannel<GetChannelBadgesResponse>("get_channel_badges", channelId),
-          invokeChannel<GetTwitchEmotesResponse>("get_twitch_channel_emotes", channelId)
+        const [emotes, badges, twitchEmotes] = await Promise.all([
+          load<Emote[]>("emotes", "get_channel_emotes"),
+          load<GetChannelBadgesResponse>("badges", "get_channel_badges"),
+          load<GetTwitchEmotesResponse>("twitch", "get_twitch_channel_emotes")
         ]);
 
-        const thirdParty = new Map<string, string>();
-        emoteList?.forEach(e => thirdParty.set(e.name, e.url));
+        const thirdParty = emotes.data
+          ? new Map(emotes.data.map((e): [string, string] => [e.name, e.url]))
+          : previous?.thirdParty ?? new Map<string, string>();
 
-        const twitch = new Map<string, string>();
-        if (twitchEmotes?.data) {
-          twitchEmotes.data.forEach((e: TwitchEmote) => {
+        let twitch = previous?.twitch ?? new Map<string, string>();
+        if (twitchEmotes.data?.data) {
+          twitch = new Map();
+          twitchEmotes.data.data.forEach((e: TwitchEmote) => {
             const url = e.images?.url_2x || e.images?.url_1x;
             if (e.name && url) {
               twitch.set(e.name, url);
@@ -129,19 +164,43 @@ export function useEmotes(): UseEmotesReturn {
           info(`[useEmotes] Loaded ${twitch.size} Twitch channel emotes for ${channelId}`);
         }
 
+        const pending = new Set<EmoteSource>();
+        if (emotes.retryable) pending.add("emotes");
+        if (badges.retryable) pending.add("badges");
+        if (twitchEmotes.retryable) pending.add("twitch");
+
         const entry: ChannelEmoteEntry = {
           thirdParty,
           twitch,
-          badges: badges?.user?.broadcastBadges ?? [],
+          badges: badges.data ? badges.data.user?.broadcastBadges ?? [] : previous?.badges ?? [],
+          pending,
         };
 
-        if (cache.size >= CHANNEL_CACHE_MAX) {
+        if (cache.size >= CHANNEL_CACHE_MAX && !cache.has(channelId)) {
           const oldest = cache.keys().next().value;
           if (oldest !== undefined) cache.delete(oldest);
         }
         cache.set(channelId, entry);
-        setFocusedChannelIdInternal(channelId);
+        if (focus) setFocusedChannelIdInternal(channelId);
         setCacheRevision((r) => r + 1);
+
+        // Twitch answers a degraded source with nothing. Refetch it in the
+        // background so the channel is not stuck half-loaded until you leave it.
+        const shouldRetry = pending.size > 0
+          && attempt < MAX_RETRIES
+          && !unmountedRef.current
+          && !retryTimersRef.current.has(channelId);
+        if (shouldRetry) {
+          info(`[useEmotes] Partial load for ${channelId}, retrying in ${RETRY_DELAY_MS / 1000}s`);
+          const timer = setTimeout(() => {
+            retryTimersRef.current.delete(channelId);
+            // Evicted meanwhile: nobody is watching this channel any more.
+            if (!cache.has(channelId)) return;
+            // Never refocus: the user may have moved on since the failure.
+            fetchChannel(channelId, false, true, attempt + 1);
+          }, RETRY_DELAY_MS);
+          retryTimersRef.current.set(channelId, timer);
+        }
       } catch (err) {
         logError(`[useEmotes] Failed to load channel emotes for ${channelId}: ${err}`);
       } finally {
@@ -152,6 +211,11 @@ export function useEmotes(): UseEmotesReturn {
     inflightRef.current.set(channelId, promise);
     return promise;
   }, []);
+
+  const loadChannelEmotes = useCallback(
+    (channelId: string) => fetchChannel(channelId, true, false, 0),
+    [fetchChannel]
+  );
 
   const setFocusedChannelId = useCallback((channelId: string | null) => {
     setFocusedChannelIdInternal(channelId);
