@@ -44,10 +44,10 @@ export default function App() {
 
   const { isActive: isPointerActive, markActive: markPointerActive, reset: resetPointerActive } = useIdleTimer(2500);
 
-  const { isLoggedIn, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
+  const { isLoggedIn, isAuthResolved, selfInfo, followedChannels, isLoadingFollowed, login, logout, refreshFollowedChannels } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { topStreams, isLoading: isLoadingBrowse, loadTopStreams } = useTopStreams();
-  const chat = useChat(deferredFocusedChannel, isLoggedIn);
+  const chat = useChat(deferredFocusedChannel, isLoggedIn, isAuthResolved);
   useUpdater();
 
   const setChannels = useCallback((updater: string[] | ((prev: string[]) => string[])) => {

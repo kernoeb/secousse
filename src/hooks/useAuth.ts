@@ -6,6 +6,7 @@ import type { SelfInfo, GetSelfInfoResponse, GetFollowedChannelsResponse, UserIn
 
 interface UseAuthReturn {
   isLoggedIn: boolean;
+  isAuthResolved: boolean;
   selfInfo: SelfInfo | null;
   followedChannels: UserInfo[];
   isLoadingFollowed: boolean;
@@ -16,6 +17,9 @@ interface UseAuthReturn {
 
 export function useAuth(): UseAuthReturn {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  // False until the stored token has been checked, so `isLoggedIn` is not yet
+  // trustworthy. Chat waits for it rather than building an anonymous socket.
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [selfInfo, setSelfInfo] = useState<SelfInfo | null>(null);
   const [followedChannels, setFollowedChannels] = useState<UserInfo[]>([]);
   const [isLoadingFollowed, setIsLoadingFollowed] = useState(true);
@@ -59,6 +63,8 @@ export function useAuth(): UseAuthReturn {
     } catch (err) {
       logError(`[useAuth] Failed to check login status: ${err}`);
       setIsLoadingFollowed(false);
+    } finally {
+      setIsAuthResolved(true);
     }
   }, []);
 
@@ -110,6 +116,7 @@ export function useAuth(): UseAuthReturn {
 
   return {
     isLoggedIn,
+    isAuthResolved,
     selfInfo,
     followedChannels,
     isLoadingFollowed,

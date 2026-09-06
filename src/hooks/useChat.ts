@@ -5,13 +5,18 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { info, debug, error as logError } from "@tauri-apps/plugin-log";
 import type { ChatMessage, ChatNotice } from "../types";
 
+// A dropped socket is usually back within seconds, so try once quickly, then
+// settle into a slower loop for as long as the channel stays open.
+const FIRST_RECONNECT_MS = 2000;
+const RETRY_DELAY_MS = 10_000;
+
 interface UseChatReturn {
   messages: ChatMessage[];
   isConnected: boolean;
   sendMessage: (message: string) => Promise<void>;
 }
 
-export function useChat(channel: string | null, isLoggedIn: boolean): UseChatReturn {
+export function useChat(channel: string | null, isLoggedIn: boolean, isAuthResolved: boolean): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const currentChannelRef = useRef<string | null>(null);
@@ -25,12 +30,9 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
   // would otherwise produce duplicate React keys and force a full reconcile).
   const nextKeyRef = useRef(0);
 
-  // Identifies this hook instance to the Rust chat registry. The window label
-  // prefix lets a closed pop-out release everything it held in one sweep.
+  // Id of the live connection attempt, so the reconnect listener releases and
+  // rebuilds the same one. Assigned by the connect effect below.
   const subscriberRef = useRef<string | null>(null);
-  if (!subscriberRef.current) {
-    subscriberRef.current = `${getCurrentWindow().label}:${crypto.randomUUID()}`;
-  }
 
   // Connect to chat when channel changes
   useEffect(() => {
@@ -42,6 +44,10 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       seenIdsRef.current.clear();
       return;
     }
+
+    // Connecting before the token check lands would build an anonymous socket
+    // and rebuild it a moment later, closing and reopening the IRC connection.
+    if (!isAuthResolved) return;
 
     // Guard against duplicate connections. Keyed on the login state too: an
     // anonymous connection cannot send, so logging in has to rebuild it.
@@ -57,28 +63,47 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
     setMessages([]);
     seenIdsRef.current.clear();
 
-    const subscriber = subscriberRef.current!;
-    const connected = invoke("connect_to_chat", { channel, subscriber })
-      .then(() => {
+    // One id per run, never per hook instance: Rust keeps subscribers in a set,
+    // so two runs sharing an id count as one and the first cleanup would close
+    // the connection the second run is still using.
+    const subscriber = `${getCurrentWindow().label}:${crypto.randomUUID()}`;
+    subscriberRef.current = subscriber;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const release = () => invoke("disconnect_from_chat", { channel, subscriber })
+      .catch(err => logError(`[useChat] Failed to disconnect from chat: ${err}`));
+
+    const attempt = async () => {
+      try {
+        await invoke("connect_to_chat", { channel, subscriber });
+        // The effect was torn down while Rust was registering us, so its own
+        // release ran too early: release again now that the id exists.
+        if (cancelled) {
+          release();
+          return;
+        }
         setIsConnected(true);
-      })
-      .catch(err => {
+      } catch (err) {
         logError(`[useChat] Failed to connect to chat: ${err}`);
-        connectingRef.current = null;
+        if (cancelled) return;
         setIsConnected(false);
-      });
+        retryTimer = setTimeout(attempt, RETRY_DELAY_MS);
+      }
+    };
+    attempt();
 
     // Rust keeps the connection alive while another window still subscribes.
     // Clearing the guard lets a re-run for the same channel reconnect.
     return () => {
+      cancelled = true;
       connectingRef.current = null;
-      // Chained on the connect: releasing a subscriber Rust has not registered
-      // yet is a no-op, and would leave the connection with an id no window
-      // can ever release.
-      connected.then(() => invoke("disconnect_from_chat", { channel, subscriber }))
-        .catch(err => logError(`[useChat] Failed to disconnect from chat: ${err}`));
+      clearTimeout(retryTimer);
+      // Unconditional: releasing an id Rust never registered is a no-op, and
+      // the reconnect listener may have registered ours without us knowing.
+      release();
     };
-  }, [channel, isLoggedIn]);
+  }, [channel, isLoggedIn, isAuthResolved]);
 
   // `listen()` is async: if the cleanup fires before it resolves, the unlisten
   // function would be lost and the listener leaks. We capture the unlisten in a
@@ -173,14 +198,20 @@ export function useChat(channel: string | null, isLoggedIn: boolean): UseChatRet
       setIsConnected(false);
       info("[useChat] Attempting to reconnect...");
       try {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        if (cancelled || disconnectedChannel !== target) return;
-        await invoke("connect_to_chat", { channel, subscriber: subscriberRef.current });
-        if (cancelled) return;
-        setIsConnected(true);
-        info("[useChat] Successfully reconnected");
-      } catch (err) {
-        logError(`[useChat] Failed to reconnect: ${err}`);
+        for (let attempt = 0; ; attempt++) {
+          const wait = attempt === 0 ? FIRST_RECONNECT_MS : RETRY_DELAY_MS;
+          await new Promise(resolve => setTimeout(resolve, wait));
+          if (cancelled || disconnectedChannel !== target) return;
+          try {
+            await invoke("connect_to_chat", { channel, subscriber: subscriberRef.current });
+            if (cancelled) return;
+            setIsConnected(true);
+            info("[useChat] Successfully reconnected");
+            return;
+          } catch (err) {
+            logError(`[useChat] Failed to reconnect: ${err}`);
+          }
+        }
       } finally {
         if (reconnectingRef.current === disconnectedChannel) {
           reconnectingRef.current = null;

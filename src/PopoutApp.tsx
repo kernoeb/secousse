@@ -17,10 +17,10 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
-  const { isLoggedIn } = useAuth();
+  const { isLoggedIn, isAuthResolved } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { userInfo } = useUserInfo(channel);
-  const chat = useChat(isChatOpen ? channel : null, isLoggedIn);
+  const chat = useChat(isChatOpen ? channel : null, isLoggedIn, isAuthResolved);
 
   const initRef = useRef(false);
 
