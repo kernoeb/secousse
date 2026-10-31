@@ -1,9 +1,9 @@
 import { useState, useMemo, memo, useRef, useEffect, useCallback } from "react";
-import { useI18n } from "../i18n";
-import { PanelRight, PanelLeft, User, Send } from "lucide-react";
+import { useI18n, type Translate } from "../i18n";
+import { PanelRight, PanelLeft, User, Send, Reply, X } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
 import { cn, twitchEmoteUrl } from "../lib/utils";
-import type { ChatMessage, TwitchBadge } from "../types";
+import type { ChatDeletion, ChatMessage, ChatReplyParent, TwitchBadge } from "../types";
 import { EmoteImg } from "./EmoteImg";
 
 const VLIST_STYLE: React.CSSProperties = { padding: 12 };
@@ -13,16 +13,33 @@ const ASIDE_STYLE: React.CSSProperties = { contain: "layout style paint" };
 // this many px of the bottom, snap back to following live messages.
 const SCROLL_NOISE_PX = 16;
 
+const DELETION_KEYS = {
+  message: "chat.deletedMessage",
+  timeout: "chat.deletedTimeout",
+  ban: "chat.deletedBan",
+  clear: "chat.deletedClear",
+} as const satisfies Record<ChatDeletion, string>;
+
+// Notices, local echoes ("self-N") and messages without an IRC id have nothing
+// Twitch could attach a reply to.
+function canReplyTo(msg: ChatMessage): boolean {
+  return !msg.system && !msg.deleted && !!msg.id && !msg.id.startsWith("self-");
+}
+
 interface ChatProps {
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
+  /** Channel the messages come from. A pending reply is dropped when it changes. */
+  channel: string | null;
   messages: ChatMessage[];
   emotes: Map<string, string>;
   globalBadges: TwitchBadge[];
   channelBadges: TwitchBadge[];
   isLoggedIn: boolean;
   isConnected: boolean;
-  onSendMessage: (message: string) => void;
+  onSendMessage: (message: string, reply?: ChatReplyParent) => void;
+  /** Login of the signed-in user, to highlight messages that mention them. */
+  selfLogin?: string | null;
   isFullscreen?: boolean;
   openButtonVisible?: boolean;
 }
@@ -30,6 +47,7 @@ interface ChatProps {
 export function Chat({
   isOpen,
   setIsOpen,
+  channel,
   messages,
   emotes,
   globalBadges,
@@ -37,11 +55,14 @@ export function Chat({
   isLoggedIn,
   isConnected,
   onSendMessage,
+  selfLogin,
   isFullscreen = false,
   openButtonVisible = true,
 }: ChatProps) {
   const { t } = useI18n();
   const [chatInput, setChatInput] = useState("");
+  const [replyTo, setReplyTo] = useState<ChatReplyParent | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFollowing, setIsFollowing] = useState(true);
   const isFollowingRef = useRef(true);
   const vlistRef = useRef<VListHandle>(null);
@@ -53,7 +74,14 @@ export function Chat({
   // The live `messages` prop keeps accumulating in the background; we just
   // don't render it. When the user lands back at the bottom we swap to live.
   const [snapshot, setSnapshot] = useState<ChatMessage[] | null>(null);
-  const displayed = snapshot ?? messages;
+  // A frozen snapshot must still show moderation, so swap in the rows marked deleted since.
+  const displayed = useMemo(() => {
+    if (!snapshot) return messages;
+    const deleted = new Map<string, ChatMessage>();
+    for (const m of messages) if (m.deleted) deleted.set(m._renderKey ?? m.id, m);
+    if (deleted.size === 0) return snapshot;
+    return snapshot.map((m) => deleted.get(m._renderKey ?? m.id) ?? m);
+  }, [snapshot, messages]);
   const displayedLenRef = useRef(0);
   displayedLenRef.current = displayed.length;
   // Read inside the wheel handler so the listener effect can have `[]` deps.
@@ -69,20 +97,43 @@ export function Chat({
     return map;
   }, [globalBadges, channelBadges]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (chatInput.trim()) {
-        onSendMessage(chatInput);
-        setChatInput("");
-      }
-    }
-  };
+  const ownLogin = selfLogin?.toLowerCase() || null;
+  const mentionRe = useMemo(() => {
+    if (!ownLogin) return null;
+    const login = ownLogin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^\\w])@?${login}(?!\\w)`, "i");
+  }, [ownLogin]);
+
+  const startReply = useCallback((msg: ChatMessage) => {
+    setReplyTo({
+      msg_id: msg.id,
+      user_login: msg.login || msg.user.toLowerCase(),
+      display_name: msg.user,
+      body: msg.message,
+    });
+    textareaRef.current?.focus();
+  }, []);
+
+  // A reply kept across a channel switch would point at a message in another channel.
+  useEffect(() => {
+    setReplyTo(null);
+  }, [channel]);
 
   const handleSend = () => {
     if (chatInput.trim()) {
-      onSendMessage(chatInput);
+      onSendMessage(chatInput, replyTo ?? undefined);
       setChatInput("");
+      setReplyTo(null);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    } else if (e.key === "Escape" && replyTo) {
+      e.preventDefault();
+      setReplyTo(null);
     }
   };
 
@@ -201,6 +252,10 @@ export function Chat({
               emotes={emotes}
               badgeIndex={badgeIndex}
               onImageLoad={pinToLast}
+              selfLogin={ownLogin}
+              mentionRe={mentionRe}
+              onReply={isLoggedIn ? startReply : undefined}
+              t={t}
             />
           ))}
         </VList>
@@ -215,8 +270,22 @@ export function Chat({
         )}
 
         <div className="p-3 border-t border-border">
+          {replyTo && (
+            <div className="flex items-center gap-1.5 mb-2 pl-2 pr-1 py-1 rounded-md bg-surface-alt text-[12px] text-muted">
+              <Reply className="w-3.5 h-3.5 shrink-0" />
+              <span className="flex-1 truncate">{t("chat.replyingTo", { name: replyTo.display_name })}</span>
+              <button
+                onClick={() => setReplyTo(null)}
+                className="p-0.5 rounded hover:bg-hover hover:text-white transition-colors"
+                title={t("chat.cancelReply")}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           <div className="relative mb-3">
             <textarea
+              ref={textareaRef}
               placeholder={!isLoggedIn ? t("chat.loginToChat") : !isConnected ? t("chat.connecting") : t("chat.placeholder")}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
@@ -265,11 +334,16 @@ interface ChatMessageViewProps {
   emotes: Map<string, string>;
   badgeIndex: Map<string, string>;
   onImageLoad: () => void;
+  selfLogin: string | null;
+  mentionRe: RegExp | null;
+  /** Absent when logged out: replying needs an account. */
+  onReply?: (msg: ChatMessage) => void;
+  t: Translate;
 }
 
-const ChatMessageView = memo(function ChatMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessageViewProps) {
-  if (msg.system) return <ChatNoticeView msg={msg} />;
-  return <ChatUserMessageView msg={msg} emotes={emotes} badgeIndex={badgeIndex} onImageLoad={onImageLoad} />;
+const ChatMessageView = memo(function ChatMessageView(props: ChatMessageViewProps) {
+  if (props.msg.system) return <ChatNoticeView msg={props.msg} />;
+  return <ChatUserMessageView {...props} />;
 });
 
 function ChatNoticeView({ msg }: { msg: ChatMessage }) {
@@ -280,7 +354,12 @@ function ChatNoticeView({ msg }: { msg: ChatMessage }) {
   );
 }
 
-function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessageViewProps) {
+function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad, selfLogin, mentionRe, onReply, t }: ChatMessageViewProps) {
+  const isMention = useMemo(() => {
+    if (!selfLogin || msg.login === selfLogin) return false;
+    return msg.reply?.user_login === selfLogin || !!mentionRe?.test(msg.message);
+  }, [msg.login, msg.reply, msg.message, selfLogin, mentionRe]);
+
   const badgeUrls = useMemo(() => {
     if (!msg.badges) return [];
     const out: string[] = [];
@@ -325,7 +404,22 @@ function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessa
   }, [msg.message, msg.emotes, emotes, onImageLoad]);
 
   return (
-    <div className="text-[13px] leading-tight break-words py-0.5">
+    <div
+      className={cn(
+        "group relative text-[13px] leading-tight break-words py-0.5",
+        isMention && "-mx-2 pl-1.5 pr-2 border-l-2 border-twitch bg-twitch/15 rounded-r-sm",
+        msg.deleted && "opacity-50",
+      )}
+      title={msg.deleted ? t(DELETION_KEYS[msg.deleted]) : undefined}
+    >
+      {msg.reply && (
+        <div className="flex items-center gap-1 mb-0.5 text-[11px] text-muted min-w-0">
+          <Reply className="w-3 h-3 shrink-0" />
+          <span className="truncate">
+            {t("chat.replyContext", { name: msg.reply.display_name })} {msg.reply.body}
+          </span>
+        </div>
+      )}
       <span className="text-muted mr-2 text-[11px]">
         {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
       </span>
@@ -340,7 +434,16 @@ function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad }: ChatMessa
       >
         {msg.user}:
       </span>
-      <span>{parts}</span>
+      <span className={msg.deleted ? "text-muted [&_img]:grayscale" : undefined}>{parts}</span>
+      {onReply && canReplyTo(msg) && (
+        <button
+          onClick={() => onReply(msg)}
+          className="absolute right-0 top-0 p-0.5 rounded bg-elevated text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-white transition-opacity"
+          title={t("chat.reply")}
+        >
+          <Reply className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }

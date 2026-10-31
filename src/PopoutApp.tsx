@@ -19,7 +19,7 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
-  const { isLoggedIn, isAuthResolved } = useAuth();
+  const { isLoggedIn, isAuthResolved, selfInfo } = useAuth();
   const { allEmotes, globalBadges, channelBadges, loadChannelEmotes } = useEmotes();
   const { userInfo } = useUserInfo(channel);
   const chat = useChat(isChatOpen ? channel : null, isLoggedIn, isAuthResolved);
@@ -101,6 +101,7 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
 
         {isChatOpen && (
           <Chat
+            channel={channel}
             isOpen={isChatOpen}
             setIsOpen={setIsChatOpen}
             messages={chat.messages}
@@ -110,6 +111,7 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
             isLoggedIn={isLoggedIn}
             isConnected={chat.isConnected}
             onSendMessage={chat.sendMessage}
+            selfLogin={selfInfo?.login}
           />
         )}
       </div>

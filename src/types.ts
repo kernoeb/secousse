@@ -102,10 +102,24 @@ export interface ChatEmoteRange {
   end: number;
 }
 
+export interface ChatReplyParent {
+  msg_id: string;
+  user_login: string;
+  display_name: string;
+  body: string;
+}
+
+/** Why a message is shown greyed out: a moderator deleted it, timed out or banned its author, or cleared the chat. */
+export type ChatDeletion = "message" | "timeout" | "ban" | "clear";
+
 /** Chat message from IRC */
 export interface ChatMessage {
   id: string;
+  /** Display name. */
   user: string;
+  /** Lowercase login. Missing on server notices. */
+  login?: string;
+  user_id?: string;
   message: string;
   color?: string;
   badges: [string, string][];
@@ -116,12 +130,23 @@ export interface ChatMessage {
   _renderKey?: string;
   /** Server notice (message refused, room mode changed) rather than a user message. */
   system?: boolean;
+  reply?: ChatReplyParent | null;
+  deleted?: ChatDeletion;
 }
 
 export interface ChatNotice {
   msg_id: string;
   message: string;
   channel: string;
+}
+
+/** Payload of `chat-clear`. No target at all means the whole chat was cleared. */
+export interface ChatClear {
+  channel: string;
+  target_msg_id: string | null;
+  target_user_id: string | null;
+  target_login: string | null;
+  ban_duration: number | null;
 }
 
 // ============================================

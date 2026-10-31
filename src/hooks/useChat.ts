@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { info, debug, error as logError } from "@tauri-apps/plugin-log";
-import type { ChatMessage, ChatNotice } from "../types";
+import type { ChatClear, ChatDeletion, ChatMessage, ChatNotice, ChatReplyParent } from "../types";
 
 // A dropped socket is usually back within seconds, so try once quickly, then
 // settle into a slower loop for as long as the channel stays open.
@@ -13,7 +13,13 @@ const RETRY_DELAY_MS = 10_000;
 interface UseChatReturn {
   messages: ChatMessage[];
   isConnected: boolean;
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (message: string, reply?: ChatReplyParent) => Promise<void>;
+}
+
+function deletionKind(clear: ChatClear): ChatDeletion {
+  if (clear.target_msg_id) return "message";
+  if (!clear.target_user_id && !clear.target_login) return "clear";
+  return clear.ban_duration != null ? "timeout" : "ban";
 }
 
 export function useChat(channel: string | null, isLoggedIn: boolean, isAuthResolved: boolean): UseChatReturn {
@@ -179,6 +185,46 @@ export function useChat(channel: string | null, isLoggedIn: boolean, isAuthResol
     };
   }, []);
 
+  // Deleted messages stay in the list, greyed out. Only the matching rows get
+  // a new object, so the memoised rows of the others do not re-render.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<ChatClear>("chat-clear", (event) => {
+      const clear = event.payload;
+      if (clear.channel.toLowerCase() !== currentChannelRef.current) return;
+
+      const kind = deletionKind(clear);
+      const login = clear.target_login?.toLowerCase();
+      // Our own echoes carry no user id, so a timeout of ourselves matches on the login.
+      const matches = (m: ChatMessage) => {
+        if (m.system || m.deleted) return false;
+        if (kind === "clear") return true;
+        if (kind === "message") return m.id === clear.target_msg_id;
+        return (!!clear.target_user_id && m.user_id === clear.target_user_id) || (!!login && m.login === login);
+      };
+      info(`[useChat] Clear (${kind}) on #${clear.channel}`);
+      setMessages((prev) => {
+        let changed = false;
+        const next = prev.map((m) => {
+          if (!matches(m)) return m;
+          changed = true;
+          return { ...m, deleted: kind };
+        });
+        return changed ? next : prev;
+      });
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -228,11 +274,19 @@ export function useChat(channel: string | null, isLoggedIn: boolean, isAuthResol
     };
   }, [channel]);
 
-  const sendMessage = useCallback(async (message: string) => {
-    if (!message.trim() || !channel || !isLoggedIn || !isConnected) return;
+  const sendMessage = useCallback(async (message: string, reply?: ChatReplyParent) => {
+    let text = message.trim();
+    if (!text || !channel || !isLoggedIn || !isConnected) return;
+
+    // Twitch's own client starts a reply with the parent's mention, and other
+    // clients rely on it to show who the reply is for.
+    const mention = reply ? `@${reply.user_login} ` : "";
+    if (mention && !text.startsWith("/") && !text.toLowerCase().startsWith(mention.toLowerCase())) {
+      text = mention + text;
+    }
 
     try {
-      await invoke("send_chat_message", { channel, message: message.trim() });
+      await invoke("send_chat_message", { channel, message: text, reply: reply ?? null });
     } catch (err) {
       logError(`[useChat] Send message error: ${err}`);
     }

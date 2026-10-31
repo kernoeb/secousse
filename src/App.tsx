@@ -348,6 +348,7 @@ export default function App() {
         </main>
 
         <Chat
+          channel={deferredFocusedChannel}
           isOpen={isChatOpen}
           setIsOpen={setIsChatOpen}
           messages={chat.messages}
@@ -357,6 +358,7 @@ export default function App() {
           isLoggedIn={isLoggedIn}
           isConnected={chat.isConnected}
           onSendMessage={chat.sendMessage}
+          selfLogin={selfInfo?.login}
           isFullscreen={isFullscreen}
           openButtonVisible={isPointerActive}
         />

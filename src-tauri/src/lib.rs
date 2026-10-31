@@ -83,7 +83,7 @@ pub struct WatchState {
 // the wrong channel. Subscribers are ids, not a count, so releasing twice (JS
 // unmount plus window destroy) cannot close a connection someone else still uses.
 pub struct ChatEntry {
-    pub sender: tokio::sync::mpsc::Sender<String>,
+    pub sender: tokio::sync::mpsc::Sender<chat::OutgoingMessage>,
     pub read_task: tokio::task::JoinHandle<()>,
     pub write_task: tokio::task::JoinHandle<()>,
     pub subscribers: HashSet<String>,
@@ -370,8 +370,15 @@ async fn disconnect_from_chat(state: State<'_, AppState>, channel: String, subsc
 }
 
 #[tauri::command]
-async fn send_chat_message(state: State<'_, AppState>, channel: String, message: String) -> Result<(), String> {
+async fn send_chat_message(
+    state: State<'_, AppState>,
+    channel: String,
+    message: String,
+    reply: Option<chat::ReplyParent>,
+) -> Result<(), String> {
     let channel = channel.trim().to_lowercase();
+    // A line break ends an IRC command: the next line would go out as a raw command.
+    let message = message.replace(['\r', '\n'], " ");
     debug!("[send_chat_message] Attempting to send to #{}: {}", channel, message);
 
     let chats = state.chats.lock().await;
@@ -380,7 +387,7 @@ async fn send_chat_message(state: State<'_, AppState>, channel: String, message:
         return Err(format!("Not connected to #{}", channel));
     };
 
-    entry.sender.send(message).await.map_err(|e| {
+    entry.sender.send(chat::OutgoingMessage { text: message, reply }).await.map_err(|e| {
         error!("[send_chat_message] Send error on #{}: {}", channel, e);
         e.to_string()
     })

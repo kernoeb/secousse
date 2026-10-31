@@ -1,5 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
-import type { ChatMessage } from "../types";
+import type { ChatClear, ChatMessage } from "../types";
 
 export type SpamMode = "emotes" | "long" | "mixed";
 
@@ -74,23 +74,51 @@ export function startSpam(channel: string, emoteNames: string[], opts: SpamOptio
   const intervalMs = Math.max(1, 1000 / rate);
   stopAt = opts.durationSec ? Date.now() + opts.durationSec * 1000 : null;
 
+  // Recent messages, so some new ones can reply to them and some get deleted.
+  const recent: ChatMessage[] = [];
   let n = 0;
   timer = setInterval(() => {
     if (stopAt !== null && Date.now() >= stopAt) {
       stopSpam();
       return;
     }
+    const user = pick(USERS);
+    const parent = n % 10 === 0 && recent.length > 0 ? pick(recent) : null;
     const msg: ChatMessage = {
       id: `sim-${Date.now()}-${n++}`,
-      user: pick(USERS),
+      user,
+      login: user.toLowerCase(),
+      user_id: `sim-${user}`,
       message: buildMessage(mode, emoteNames, emotesPerMsg),
       color: pick(COLORS),
       badges: [],
       emotes: [],
       timestamp: Date.now(),
       channel,
+      reply: parent && {
+        msg_id: parent.id,
+        user_login: parent.login ?? "",
+        display_name: parent.user,
+        body: parent.message,
+      },
     };
     emit("chat-message", msg);
+    recent.push(msg);
+    if (recent.length > 20) recent.shift();
+
+    // One deleted message every 25, and a timeout every 500.
+    if (n % 25 === 0) {
+      const target = pick(recent);
+      const timeout = n % 500 === 0;
+      const clear: ChatClear = {
+        channel,
+        target_msg_id: timeout ? null : target.id,
+        target_user_id: timeout ? target.user_id ?? null : null,
+        target_login: target.login ?? null,
+        ban_duration: timeout ? 600 : null,
+      };
+      emit("chat-clear", clear);
+    }
   }, intervalMs);
 
   console.log(`[spamSim] started: ${rate}/s mode=${mode} on #${channel}${opts.durationSec ? ` for ${opts.durationSec}s` : ""}`);
