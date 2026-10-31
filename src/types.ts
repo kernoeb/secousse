@@ -21,6 +21,8 @@ export interface StreamInfo {
   id: string;
   title: string;
   viewersCount: number;
+  /** ISO 8601 start time of the broadcast. */
+  createdAt?: string;
   game?: Game;
 }
 

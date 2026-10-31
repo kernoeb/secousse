@@ -1,5 +1,6 @@
-import { Heart, Video } from "lucide-react";
-import { cn, formatViewers } from "../lib/utils";
+import { useEffect, useState } from "react";
+import { Clock, Heart, Video } from "lucide-react";
+import { cn, formatUptime, formatViewers } from "../lib/utils";
 import type { UserInfo } from "../types";
 
 interface StreamInfoProps {
@@ -53,9 +54,28 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
               <Video className="w-4 h-4" />
               {formatViewers(userInfo.stream.viewersCount)}
             </div>
+            {userInfo.stream.createdAt && <Uptime startedAt={userInfo.stream.createdAt} />}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function Uptime({ startedAt }: { startedAt: string }) {
+  const start = Date.parse(startedAt);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (Number.isNaN(start)) return;
+    const phase = (((now - start) % 1000) + 1000) % 1000;
+    const id = setTimeout(() => setNow(Date.now()), 1000 - phase + 5);
+    return () => clearTimeout(id);
+  }, [now, start]);
+  if (Number.isNaN(start)) return null;
+  return (
+    <div className="flex items-center gap-1.5 text-muted tabular-nums" title="Stream uptime">
+      <Clock className="w-3 h-3" />
+      {formatUptime(start, now)}
     </div>
   );
 }

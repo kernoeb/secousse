@@ -16,6 +16,15 @@ export function formatViewers(count: number): string {
   return count.toString();
 }
 
+/** Format the time elapsed since `startMs` (epoch ms) as h:mm:ss, like Twitch. */
+export function formatUptime(startMs: number, now: number): string {
+  const total = Math.max(0, Math.floor((now - startMs) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 /** Read+parse a localStorage entry, falling back when missing or unparseable. */
 function readPersisted<T>(key: string, fallback: T, parse: (raw: string) => T | undefined): T {
   if (typeof window === "undefined") return fallback;
