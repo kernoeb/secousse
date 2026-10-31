@@ -30,7 +30,8 @@ bun run bump          # Bump version in package.json + Cargo.toml + tauri.conf.j
 - `src/PopoutApp.tsx` — minimal shell for detached stream windows. Renders one `<VideoPlayer>` + a toggleable `<Chat>` and an always-on-top pin in the header. No sidebar/browse/search.
 - `src/components/` — `Navbar`, `Sidebar`, `VideoPlayer`, `StreamGrid` (CSS-grid layout for 1–4 tiles), `Chat`, `StreamInfo`, `BrowseGrid`, `ChannelActionButtons` (shared add-to-grid / pop-out / remove icon cluster used by sidebar rows, browse cards, and grid tile overlays).
 - `src/hooks/` — `useAuth`, `useChat`, `useEmotes`, `useSearch`, `useTopStreams`, `useUserInfo` (per-channel `get_user_info` poller; each `StreamGridTile` and `PopoutApp` instantiates its own).
-- `src/lib/utils.ts` — localStorage persistence helpers, viewer-count formatter, `cn()`, `AUTO_QUALITY` sentinel, `getPopoutChannel()`, `GRID_MAX_TILES`.
+- `src/lib/utils.ts` — localStorage persistence helpers, uptime formatter, `cn()`, `AUTO_QUALITY` sentinel, `getPopoutChannel()`, `GRID_MAX_TILES`.
+- `src/i18n/` — UI strings in English (`en.ts`, the source), French and Spanish, plus `useI18n()` and the locale-aware viewer-count formatter.
 - `src/lib/spamSim.ts` — dev-only chat spam simulator (see "Dev tooling" below).
 - `src/TauriHlsLoader.ts` — custom progressive HLS.js loader using `@tauri-apps/plugin-http`, with Twitch low-latency prefetch promotion (see "HLS streaming" below).
 - `src/types.ts` — all shared TS types (Twitch GQL/Helix shapes, chat, emotes, UI state).
@@ -90,6 +91,12 @@ This replaced a single-slot design where a pop-out stole the one sender: message
 **AppKit must be touched from the main thread.** `apply_dark_titlebar` wraps its `setAppearance:` / `setBackgroundColor_` calls in `window.run_on_main_thread(...)`. `open_popout` is an `async` command, so Tauri runs it on a tokio worker; macOS 15 traps (`EXC_BREAKPOINT`, "Must only be used from the main thread") instead of tolerating the off-thread call, and the whole app dies with SIGTRAP. The `setup()` call site is already on the main thread, so before the fix only the pop-out path crashed. Same rule for any new Cocoa call added from a command handler.
 
 **Logging** goes through `tauri-plugin-log`: stdout + a rotating file in the platform log dir (`~/Library/Logs/<id>` on macOS). Capped at 5 MB with `KeepOne` rotation. Frontend logs via `@tauri-apps/plugin-log` (`info`, `debug`, `error`); `attachConsole()` in `App.tsx` forwards `console.*` calls to the Rust log too.
+
+## Translations
+
+Every UI string goes through `t("key")` from `useI18n()`. Add each new key to `en.ts`, `fr.ts` and `es.ts`: the last 2 are typed `Record<MessageKey, string>`, so a missing key fails `tsc`. The language defaults to "System", which picks the first supported language in `navigator.languages` and falls back to English. A choice in the navbar menu is saved as `language` in localStorage, and a `storage` listener applies it to pop-out windows at once. Viewer counts use `Intl.NumberFormat` compact notation, so they read 4.8K, 4,8 k or 4,8 mil. The OAuth page that `lib.rs` serves to the browser is still English only.
+
+The macOS menu bar is rebuilt in Rust (`src-tauri/src/menu.rs`) through `set_menu_language`, which `App.tsx` calls whenever the language changes; Tauri's default menu has fixed English labels. Items that macOS adds itself (Emoji & Symbols, Start Dictation, window tiling) follow the OS language, not the in-app choice. They need `CFBundleLocalizations` in `src-tauri/Info.plist`, which only a real `.app` bundle reads, so they stay English under `tauri dev`.
 
 ## Auto-refresh intervals
 

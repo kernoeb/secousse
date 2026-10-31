@@ -4,6 +4,7 @@ import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
 
 import { useAuth, useChat, useEmotes, useIdleTimer, useSearch, useTopStreams, useUpdater, useUserInfo, useWindowFullscreen } from "./hooks";
 import { Navbar, Sidebar, StreamGrid, Chat, StreamInfo, BrowseGrid } from "./components";
+import { useI18n } from "./i18n";
 import {
   getInitialActiveTab,
   persistActiveTab,
@@ -35,6 +36,11 @@ export default function App() {
   const deferredFocusedChannel = useDeferredValue(focusedChannel);
 
   const { userInfo } = useUserInfo(deferredFocusedChannel);
+
+  const { language } = useI18n();
+  useEffect(() => {
+    invoke("set_menu_language", { language }).catch((err) => logError(`[App] set_menu_language failed: ${err}`));
+  }, [language]);
   const [isFollowing, setIsFollowing] = useState(false);
 
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(getInitialActiveTab);

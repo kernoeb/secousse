@@ -9,13 +9,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Format viewer count with K/M suffixes */
-export function formatViewers(count: number): string {
-  if (count >= 1000000) return (count / 1000000).toFixed(1) + "M";
-  if (count >= 1000) return (count / 1000).toFixed(1) + "K";
-  return count.toString();
-}
-
 /** Format the time elapsed since `startMs` (epoch ms) as h:mm:ss, like Twitch. */
 export function formatUptime(startMs: number, now: number): string {
   const total = Math.max(0, Math.floor((now - startMs) / 1000));

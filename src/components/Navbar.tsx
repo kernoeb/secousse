@@ -1,6 +1,15 @@
-import { useEffect, useRef } from "react";
-import { Search, User, LogIn, X } from "lucide-react";
-import { cn, formatViewers } from "../lib/utils";
+import { useEffect, useRef, useState } from "react";
+import { Check, Languages, Search, User, LogIn, X } from "lucide-react";
+import {
+  formatViewers,
+  LANGUAGE_NAMES,
+  LANGUAGES,
+  setLanguagePreference,
+  systemLanguage,
+  useI18n,
+  type LanguagePreference,
+} from "../i18n";
+import { cn } from "../lib/utils";
 import { ChannelActionButtons } from "./ChannelActionButtons";
 import type { SelfInfo, SearchResult, ActiveTab } from "../types";
 
@@ -53,6 +62,7 @@ export function Navbar({
   hasTopStreams,
   onGoHome,
 }: NavbarProps) {
+  const { t, language } = useI18n();
   const searchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -72,7 +82,7 @@ export function Navbar({
         <button
           onClick={onGoHome}
           className="w-8 h-8 rounded-md flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
-          title="Home"
+          title={t("nav.home")}
         >
           <img src="/app-icon.svg" alt="Secousse" className="w-8 h-8" />
         </button>
@@ -88,7 +98,7 @@ export function Navbar({
               : "text-muted hover:text-[#e8e8ee]"
           )}
         >
-          Following
+          {t("nav.following")}
         </button>
         <button
           onClick={() => {
@@ -104,7 +114,7 @@ export function Navbar({
               : "text-muted hover:text-[#e8e8ee]"
           )}
         >
-          Browse
+          {t("nav.browse")}
         </button>
       </div>
 
@@ -112,7 +122,7 @@ export function Navbar({
         <div className="relative group flex">
           <input
             type="text"
-            placeholder="Search channels..."
+            placeholder={t("nav.search")}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -155,7 +165,7 @@ export function Navbar({
                       }
                     }}
                     className="w-full flex items-center gap-3 p-3 pr-16 hover:bg-hover transition-colors text-left"
-                    title={canAddToGrid ? "Click to play • Shift+click to add to grid" : "Click to play • Shift+click to open in a new window"}
+                    title={canAddToGrid ? t("hint.playOrAdd") : t("hint.playOrPopout")}
                   >
                     <div className="w-10 h-10 rounded-full overflow-hidden bg-surface flex-shrink-0">
                       {result.profileImageURL && (
@@ -168,12 +178,12 @@ export function Navbar({
                         <div className="flex items-center gap-2 text-xs text-muted">
                           <span className="flex items-center gap-1">
                             <div className="w-2 h-2 bg-red-600 rounded-full" />
-                            {formatViewers(result.stream.viewersCount)}
+                            {formatViewers(result.stream.viewersCount, language)}
                           </span>
-                          <span className="truncate">{result.stream.game?.displayName || "Streaming"}</span>
+                          <span className="truncate">{result.stream.game?.displayName || t("channel.streaming")}</span>
                         </div>
                       ) : (
-                        <div className="text-xs text-muted">Offline</div>
+                        <div className="text-xs text-muted">{t("channel.offline")}</div>
                       )}
                     </div>
                   </button>
@@ -193,29 +203,74 @@ export function Navbar({
       </div>
 
       <div className="flex items-center gap-3">
+        <LanguageMenu />
         {isLoggedIn ? (
           <button
             onClick={onLogout}
             className="flex items-center gap-2 bg-elevated hover:bg-hover px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
           >
-            Logout
+            {t("nav.logout")}
           </button>
         ) : (
           <button
             onClick={onLogin}
             className="flex items-center gap-2 bg-twitch hover:bg-twitch-dark px-3 py-1 rounded-md font-semibold text-sm transition-colors text-white"
           >
-            <LogIn className="w-4 h-4" /> Log In
+            <LogIn className="w-4 h-4" /> {t("nav.login")}
           </button>
         )}
         <div className="w-8 h-8 bg-elevated rounded-full flex items-center justify-center overflow-hidden border border-border">
           {isLoggedIn && selfInfo?.profileImageURL ? (
-            <img src={selfInfo.profileImageURL} alt="My profile" className="w-full h-full object-cover" />
+            <img src={selfInfo.profileImageURL} alt={t("nav.myProfile")} className="w-full h-full object-cover" />
           ) : (
             <User className="w-5 h-5 opacity-50" />
           )}
         </div>
       </div>
     </nav>
+  );
+}
+
+function LanguageMenu() {
+  const { t, preference } = useI18n();
+  const [isOpen, setIsOpen] = useState(false);
+  const options: { value: LanguagePreference; label: string }[] = [
+    { value: "system", label: t("language.system", { language: LANGUAGE_NAMES[systemLanguage()] }) },
+    ...LANGUAGES.map((l) => ({ value: l, label: LANGUAGE_NAMES[l] })),
+  ];
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen((o) => !o)}
+        className="p-1.5 hover:bg-hover rounded-md transition-colors text-muted hover:text-white"
+        title={t("nav.language")}
+      >
+        <Languages className="w-4 h-4" />
+      </button>
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setIsOpen(false)} />
+          <div className="absolute top-full right-0 mt-1 bg-elevated border border-border rounded-md shadow-xl z-[61] min-w-[180px] py-1">
+            {options.map((o) => (
+              <button
+                key={o.value}
+                onClick={() => {
+                  setLanguagePreference(o.value);
+                  setIsOpen(false);
+                }}
+                className={cn(
+                  "w-full px-3 py-1.5 text-left text-sm hover:bg-hover flex items-center justify-between gap-3",
+                  preference === o.value && "text-twitch"
+                )}
+              >
+                {o.label}
+                {preference === o.value && <Check className="w-3.5 h-3.5" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

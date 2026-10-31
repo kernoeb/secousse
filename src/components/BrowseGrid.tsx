@@ -1,5 +1,5 @@
-import { formatViewers } from "../lib/utils";
 import { ChannelActionButtons } from "./ChannelActionButtons";
+import { useI18n } from "../i18n";
 import type { TopStream } from "../types";
 
 interface BrowseGridProps {
@@ -23,22 +23,23 @@ export function BrowseGrid({
   onOpenPopout,
   onRetry,
 }: BrowseGridProps) {
+  const { t } = useI18n();
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-6">
       <h1 className="text-2xl font-bold mb-6">
-        {isLoggedIn ? "Live channels" : "Top Live Streams"}
+        {isLoggedIn ? t("browse.liveChannels") : t("browse.topLive")}
       </h1>
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
-          <div className="text-muted">Loading streams...</div>
+          <div className="text-muted">{t("browse.loading")}</div>
         </div>
       ) : streams.length === 0 ? (
         <div className="flex items-center justify-center h-64">
           <div className="text-muted">
-            No streams found.{" "}
+            {t("browse.empty")}{" "}
             <button onClick={onRetry} className="text-twitch hover:underline">
-              Retry
+              {t("browse.retry")}
             </button>
           </div>
         </div>
@@ -69,6 +70,7 @@ interface StreamCardProps {
 }
 
 function StreamCard({ stream, canAddToGrid, onSelect, onAddToGrid, onOpenPopout }: StreamCardProps) {
+  const { t, viewers } = useI18n();
   const handleClick = (e: React.MouseEvent) => {
     if (e.shiftKey) {
       e.preventDefault();
@@ -83,16 +85,16 @@ function StreamCard({ stream, canAddToGrid, onSelect, onAddToGrid, onOpenPopout 
       <button
         onClick={handleClick}
         className="w-full text-left"
-        title="Click to play • Shift+click to add to grid"
+        title={canAddToGrid ? t("hint.playOrAdd") : t("hint.playOrPopout")}
       >
         <div className="relative aspect-video bg-base">
           {stream.previewImageURL && (
             <img src={stream.previewImageURL} alt={stream.title} className="w-full h-full object-cover" />
           )}
           <div className="absolute bottom-2 left-2 flex items-center gap-2">
-            <div className="bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded">LIVE</div>
+            <div className="bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded">{t("player.live")}</div>
             <div className="bg-black/70 text-white text-xs px-1.5 py-0.5 rounded">
-              {formatViewers(stream.viewersCount)} viewers
+              {viewers(stream.viewersCount)}
             </div>
           </div>
         </div>
@@ -112,7 +114,7 @@ function StreamCard({ stream, canAddToGrid, onSelect, onAddToGrid, onOpenPopout 
               {stream.title}
             </h3>
             <p className="text-muted text-sm truncate">{stream.broadcaster.displayName}</p>
-            <p className="text-muted text-xs truncate">{stream.game?.displayName || "Streaming"}</p>
+            <p className="text-muted text-xs truncate">{stream.game?.displayName || t("channel.streaming")}</p>
           </div>
         </div>
       </button>

@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useI18n } from "../i18n";
 import Hls from "hls.js";
 import { invoke } from "@tauri-apps/api/core";
 import { debug, info, error as logError } from "@tauri-apps/plugin-log";
@@ -7,7 +8,6 @@ import { TauriHlsLoader } from "../TauriHlsLoader";
 import { useIdleTimer } from "../hooks";
 import {
   cn,
-  formatViewers,
   AUTO_QUALITY,
   getInitialVolume,
   persistVolume,
@@ -39,6 +39,7 @@ export function VideoPlayer({
   compact = false,
   onRequestFocus,
 }: VideoPlayerProps) {
+  const { t, viewers } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const listenersCleanupRef = useRef<(() => void) | null>(null);
@@ -340,7 +341,7 @@ export function VideoPlayer({
             )}
             <div>
               <h2 className="text-xl font-bold text-white">{userInfo?.displayName || channel}</h2>
-              <p className="text-muted mt-1">Channel is currently offline</p>
+              <p className="text-muted mt-1">{t("channel.offlineLong")}</p>
             </div>
           </div>
         </div>
@@ -388,7 +389,7 @@ export function VideoPlayer({
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="w-10 h-10 text-twitch animate-spin" />
-            <span className="text-white text-sm">Loading stream...</span>
+            <span className="text-white text-sm">{t("player.loading")}</span>
           </div>
         </div>
       )}
@@ -400,10 +401,10 @@ export function VideoPlayer({
         )}>
           <div className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
             <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-            LIVE
+            {t("player.live")}
           </div>
           <div className="bg-black/70 text-white text-xs px-2 py-1 rounded">
-            {formatViewers(userInfo.stream.viewersCount)} viewers
+            {viewers(userInfo.stream.viewersCount)}
           </div>
         </div>
       )}
@@ -432,10 +433,10 @@ export function VideoPlayer({
             {isVolumeHovered && (
               <div className="absolute bottom-full left-0 mb-2 px-2 py-1 rounded bg-elevated border border-border text-white text-xs whitespace-nowrap shadow-lg pointer-events-none">
                 {forceMuted
-                  ? "Muted (unfocused tile)"
+                  ? t("player.mutedUnfocused")
                   : isMuted
-                    ? "Muted"
-                    : `Volume ${volumePercent}%`}
+                    ? t("player.muted")
+                    : t("player.volume", { percent: volumePercent })}
               </div>
             )}
 
@@ -481,7 +482,7 @@ export function VideoPlayer({
             >
               <Settings className="w-5 h-5 text-white" />
               <span className="text-white text-xs">
-                {currentQuality === AUTO_QUALITY ? "Auto" : qualities.find(q => q.id === currentQuality)?.label || "Auto"}
+                {currentQuality === AUTO_QUALITY ? t("player.auto") : qualities.find(q => q.id === currentQuality)?.label || t("player.auto")}
               </span>
             </button>
 
@@ -490,7 +491,7 @@ export function VideoPlayer({
                 <div className="fixed inset-0 z-10" onClick={() => setShowQualityMenu(false)} />
                 <div className="absolute bottom-full right-0 mb-2 bg-elevated border border-border rounded-lg shadow-xl overflow-hidden min-w-[140px] z-20">
                   <div className="p-2 border-b border-border text-xs text-muted font-semibold">
-                    Quality
+                    {t("player.quality")}
                   </div>
                   <div className="max-h-64 overflow-y-auto scrollbar-thin">
                     <button
@@ -500,7 +501,7 @@ export function VideoPlayer({
                         currentQuality === AUTO_QUALITY && "text-twitch"
                       )}
                     >
-                      Auto
+                      {t("player.auto")}
                       {currentQuality === AUTO_QUALITY && <span className="text-xs">✓</span>}
                     </button>
                     {qualities.map((q) => (

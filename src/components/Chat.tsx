@@ -1,4 +1,5 @@
 import { useState, useMemo, memo, useRef, useEffect, useCallback } from "react";
+import { useI18n } from "../i18n";
 import { PanelRight, PanelLeft, User, Send } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
 import { cn, twitchEmoteUrl } from "../lib/utils";
@@ -39,6 +40,7 @@ export function Chat({
   isFullscreen = false,
   openButtonVisible = true,
 }: ChatProps) {
+  const { t } = useI18n();
   const [chatInput, setChatInput] = useState("");
   const [isFollowing, setIsFollowing] = useState(true);
   const isFollowingRef = useRef(true);
@@ -176,11 +178,11 @@ export function Chat({
           <button
             onClick={() => setIsOpen(false)}
             className="p-1.5 hover:bg-hover rounded-md transition-colors opacity-80 hover:opacity-100"
-            title="Close chat"
+            title={t("chat.close")}
           >
             <PanelRight className="w-4 h-4" />
           </button>
-          <span className="font-bold text-[11px] uppercase tracking-[0.1em] text-muted">Stream Chat</span>
+          <span className="font-bold text-[11px] uppercase tracking-[0.1em] text-muted">{t("chat.title")}</span>
           <div className="p-1.5 opacity-80">
             <User className="w-4 h-4" />
           </div>
@@ -208,14 +210,14 @@ export function Chat({
             onClick={scrollToBottom}
             className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-twitch hover:bg-twitch-dark text-white text-xs px-3 py-1.5 rounded-full shadow-lg transition-all z-10"
           >
-            Scroll to bottom
+            {t("chat.scrollToBottom")}
           </button>
         )}
 
         <div className="p-3 border-t border-border">
           <div className="relative mb-3">
             <textarea
-              placeholder={!isLoggedIn ? "Log in to chat" : !isConnected ? "Connecting to chat..." : "Send a message"}
+              placeholder={!isLoggedIn ? t("chat.loginToChat") : !isConnected ? t("chat.connecting") : t("chat.placeholder")}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -235,7 +237,7 @@ export function Chat({
                 (!isLoggedIn || !isConnected || !chatInput.trim()) && "opacity-50 cursor-not-allowed"
               )}
             >
-              <Send className="w-4 h-4" /> Chat
+              <Send className="w-4 h-4" /> {t("chat.send")}
             </button>
           </div>
         </div>
@@ -249,7 +251,7 @@ export function Chat({
             isFullscreen ? "top-4" : "top-16",
             openButtonVisible ? "opacity-100" : "opacity-0 pointer-events-none",
           )}
-          title="Open chat"
+          title={t("chat.open")}
         >
           <PanelLeft className="w-5 h-5 text-white" />
         </button>

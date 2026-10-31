@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useI18n } from "./i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { info, error as logError, attachConsole } from "@tauri-apps/plugin-log";
@@ -13,6 +14,7 @@ interface PopoutAppProps {
 }
 
 export default function PopoutApp({ channel }: PopoutAppProps) {
+  const { t } = useI18n();
   const [isFullscreen, setIsFullscreen] = useWindowFullscreen();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
@@ -64,7 +66,7 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
             </span>
             {userInfo?.stream && (
               <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                LIVE
+                {t("player.live")}
               </span>
             )}
           </div>
@@ -72,14 +74,14 @@ export default function PopoutApp({ channel }: PopoutAppProps) {
             <button
               onClick={() => setIsChatOpen(!isChatOpen)}
               className={cn("p-1.5 rounded hover:bg-hover transition-colors", isChatOpen && "text-twitch")}
-              title="Toggle chat"
+              title={t("popout.toggleChat")}
             >
               <MessageSquare className="w-4 h-4" />
             </button>
             <button
               onClick={toggleAlwaysOnTop}
               className={cn("p-1.5 rounded hover:bg-hover transition-colors", alwaysOnTop && "text-twitch")}
-              title="Always on top"
+              title={t("popout.alwaysOnTop")}
             >
               {alwaysOnTop ? <Pin className="w-4 h-4" /> : <PinOff className="w-4 h-4" />}
             </button>

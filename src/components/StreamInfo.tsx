@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { formatViewers, useI18n } from "../i18n";
 import { Clock, Heart, Video } from "lucide-react";
-import { cn, formatUptime, formatViewers } from "../lib/utils";
+import { cn, formatUptime } from "../lib/utils";
 import type { UserInfo } from "../types";
 
 interface StreamInfoProps {
@@ -14,6 +15,7 @@ interface StreamInfoProps {
 }
 
 export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollow, onSelectChannel, onAddToGrid }: StreamInfoProps) {
+  const { t, language } = useI18n();
   const guests = userInfo?.collaboration?.guests ?? [];
 
   return (
@@ -31,13 +33,13 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
           </span>
           {guests.length > 0 && (
             <>
-              <span className="text-muted">with</span>
+              <span className="text-muted">{t("collab.with")}</span>
               {guests.map((g) => (
                 <button
                   key={g.id}
                   onClick={(e) => (e.shiftKey ? onAddToGrid(g.login) : onSelectChannel(g.login))}
                   className="flex items-center gap-1 text-twitch font-bold hover:underline cursor-pointer"
-                  title={`Watch ${g.displayName} • Shift+click to add to grid`}
+                  title={t("collab.watch", { name: g.displayName })}
                 >
                   <img src={g.profileImageURL} alt="" className="w-4 h-4 rounded-full" />
                   {g.displayName}
@@ -65,14 +67,14 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
             )}
           >
             <Heart className={cn("w-4 h-4", isFollowing && "fill-current text-red-500")} />
-            {isFollowing ? "Following" : "Follow"}
+            {isFollowing ? t("info.following") : t("info.follow")}
           </button>
         </div>
         {userInfo?.stream && (
           <div className="flex items-center gap-4 text-sm font-semibold">
             <div className="flex items-center gap-1.5 text-red-600">
               <Video className="w-4 h-4" />
-              {formatViewers(userInfo.stream.viewersCount)}
+              {formatViewers(userInfo.stream.viewersCount, language)}
             </div>
             {userInfo.stream.createdAt && <Uptime startedAt={userInfo.stream.createdAt} />}
           </div>
@@ -83,6 +85,7 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
 }
 
 function Uptime({ startedAt }: { startedAt: string }) {
+  const { t } = useI18n();
   const start = Date.parse(startedAt);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -93,7 +96,7 @@ function Uptime({ startedAt }: { startedAt: string }) {
   }, [now, start]);
   if (Number.isNaN(start)) return null;
   return (
-    <div className="flex items-center gap-1.5 text-muted tabular-nums" title="Stream uptime">
+    <div className="flex items-center gap-1.5 text-muted tabular-nums" title={t("info.uptime")}>
       <Clock className="w-3 h-3" />
       {formatUptime(start, now)}
     </div>

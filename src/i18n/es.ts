@@ -1,0 +1,71 @@
+import type { Messages } from "./en";
+
+export const es: Messages = {
+  "nav.home": "Inicio",
+  "nav.following": "Seguidos",
+  "nav.browse": "Explorar",
+  "nav.search": "Buscar canales...",
+  "nav.login": "Iniciar sesión",
+  "nav.logout": "Cerrar sesión",
+  "nav.myProfile": "Mi perfil",
+  "nav.language": "Idioma",
+  "language.system": "Sistema ({language})",
+
+  "hint.playOrAdd": "Clic para ver • Mayús+clic para añadir a la cuadrícula",
+  "hint.playOrPopout": "Clic para ver • Mayús+clic para abrir en una ventana nueva",
+  "channel.streaming": "En directo",
+  "channel.offline": "Desconectado",
+  "channel.offlineLong": "El canal está desconectado",
+  "viewers_one": "{count} espectador",
+  "viewers_other": "{count} espectadores",
+
+  "sidebar.followed": "Canales seguidos",
+  "sidebar.topStreams": "Directos destacados",
+  "sidebar.loading": "Cargando...",
+  "sidebar.loadingTop": "Cargando directos destacados...",
+  "sidebar.noLiveFollowed": "Ningún canal seguido está en directo",
+  "sidebar.loginForFollowed": "Inicia sesión para ver tus canales seguidos",
+
+  "collab.with": "con",
+  "collab.liveWith": "En directo con {names}",
+  "collab.watch": "Ver a {name} • Mayús+clic para añadir a la cuadrícula",
+
+  "browse.liveChannels": "Canales en directo",
+  "browse.topLive": "Directos destacados",
+  "browse.loading": "Cargando directos...",
+  "browse.empty": "No se encontraron directos.",
+  "browse.retry": "Reintentar",
+
+  "actions.addToGrid": "Añadir a la cuadrícula",
+  "actions.popout": "Abrir en una ventana nueva",
+  "actions.removeTile": "Quitar de la cuadrícula",
+
+  "grid.streamCount": "{count} directos",
+  "grid.fullscreen": "Pantalla completa",
+  "grid.fullscreenAll": "Todos los directos en pantalla completa",
+  "grid.exitFullscreen": "Salir de pantalla completa",
+
+  "info.follow": "Seguir",
+  "info.following": "Siguiendo",
+  "info.uptime": "Tiempo en directo",
+
+  "chat.title": "Chat del directo",
+  "chat.send": "Enviar",
+  "chat.open": "Abrir chat",
+  "chat.close": "Cerrar chat",
+  "chat.scrollToBottom": "Ir al final",
+  "chat.loginToChat": "Inicia sesión para chatear",
+  "chat.connecting": "Conectando al chat...",
+  "chat.placeholder": "Enviar un mensaje",
+
+  "player.live": "EN DIRECTO",
+  "player.loading": "Cargando directo...",
+  "player.muted": "Silenciado",
+  "player.mutedUnfocused": "Silenciado (mosaico no activo)",
+  "player.volume": "Volumen {percent} %",
+  "player.quality": "Calidad",
+  "player.auto": "Auto",
+
+  "popout.toggleChat": "Mostrar u ocultar el chat",
+  "popout.alwaysOnTop": "Siempre visible",
+};

@@ -1,4 +1,5 @@
 import { Plus, ExternalLink, X } from "lucide-react";
+import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 
 type Variant = "row" | "card" | "overlay";
@@ -54,6 +55,7 @@ export function ChannelActionButtons({
   onRemove,
   className,
 }: ChannelActionButtonsProps) {
+  const { t } = useI18n();
   const styles = STYLES[variant];
   const showAdd = !!onAddToGrid && canAddToGrid && !isInGrid;
 
@@ -68,7 +70,7 @@ export function ChannelActionButtons({
         <button
           onClick={stop(onAddToGrid!)}
           className={cn(styles.button, styles.addAccent)}
-          title="Add to grid"
+          title={t("actions.addToGrid")}
         >
           <Plus className={styles.iconSize} />
         </button>
@@ -76,7 +78,7 @@ export function ChannelActionButtons({
       <button
         onClick={stop(onOpenPopout)}
         className={cn(styles.button, styles.popoutAccent)}
-        title="Open in new window"
+        title={t("actions.popout")}
       >
         <ExternalLink className={styles.iconSize} />
       </button>
@@ -84,7 +86,7 @@ export function ChannelActionButtons({
         <button
           onClick={stop(onRemove)}
           className={cn(styles.button, "hover:bg-red-600 text-white")}
-          title="Remove tile"
+          title={t("actions.removeTile")}
         >
           <X className={styles.iconSize} />
         </button>

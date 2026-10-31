@@ -1,4 +1,5 @@
 import { Maximize, Minimize } from "lucide-react";
+import { useI18n } from "../i18n";
 import { useUserInfo } from "../hooks";
 import { VideoPlayer } from "./VideoPlayer";
 import { ChannelActionButtons } from "./ChannelActionButtons";
@@ -32,6 +33,7 @@ export function StreamGrid({
   isFullscreen,
   setIsFullscreen,
 }: StreamGridProps) {
+  const { t } = useI18n();
   const isMulti = channels.length > 1;
   const layout = LAYOUTS[channels.length] ?? LAYOUTS[4];
 
@@ -39,14 +41,14 @@ export function StreamGrid({
     <div className="flex-1 flex flex-col min-h-0">
       {isMulti && (
         <div className="h-9 shrink-0 bg-surface-alt border-b border-border flex items-center justify-between px-3">
-          <span className="text-xs text-muted">{channels.length} streams</span>
+          <span className="text-xs text-muted">{t("grid.streamCount", { count: channels.length })}</span>
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="flex items-center gap-1.5 text-xs text-[#e8e8ee] hover:bg-hover px-2 py-1 rounded transition-colors"
-            title={isFullscreen ? "Exit fullscreen" : "Fullscreen all streams"}
+            title={isFullscreen ? t("grid.exitFullscreen") : t("grid.fullscreenAll")}
           >
             {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
-            {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            {isFullscreen ? t("grid.exitFullscreen") : t("grid.fullscreen")}
           </button>
         </div>
       )}

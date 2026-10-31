@@ -1,0 +1,71 @@
+import type { Messages } from "./en";
+
+export const fr: Messages = {
+  "nav.home": "Accueil",
+  "nav.following": "Suivis",
+  "nav.browse": "Parcourir",
+  "nav.search": "Rechercher des chaînes...",
+  "nav.login": "Se connecter",
+  "nav.logout": "Se déconnecter",
+  "nav.myProfile": "Mon profil",
+  "nav.language": "Langue",
+  "language.system": "Système ({language})",
+
+  "hint.playOrAdd": "Clic pour regarder • Maj+clic pour ajouter à la grille",
+  "hint.playOrPopout": "Clic pour regarder • Maj+clic pour ouvrir dans une nouvelle fenêtre",
+  "channel.streaming": "En live",
+  "channel.offline": "Hors ligne",
+  "channel.offlineLong": "La chaîne est hors ligne",
+  "viewers_one": "{count} spectateur",
+  "viewers_other": "{count} spectateurs",
+
+  "sidebar.followed": "Chaînes suivies",
+  "sidebar.topStreams": "Meilleurs lives",
+  "sidebar.loading": "Chargement...",
+  "sidebar.loadingTop": "Chargement des meilleurs lives...",
+  "sidebar.noLiveFollowed": "Aucune chaîne suivie en live",
+  "sidebar.loginForFollowed": "Connectez-vous pour voir vos chaînes suivies",
+
+  "collab.with": "avec",
+  "collab.liveWith": "En live avec {names}",
+  "collab.watch": "Regarder {name} • Maj+clic pour ajouter à la grille",
+
+  "browse.liveChannels": "Chaînes en live",
+  "browse.topLive": "Meilleurs lives",
+  "browse.loading": "Chargement des lives...",
+  "browse.empty": "Aucun live trouvé.",
+  "browse.retry": "Réessayer",
+
+  "actions.addToGrid": "Ajouter à la grille",
+  "actions.popout": "Ouvrir dans une nouvelle fenêtre",
+  "actions.removeTile": "Retirer de la grille",
+
+  "grid.streamCount": "{count} lives",
+  "grid.fullscreen": "Plein écran",
+  "grid.fullscreenAll": "Tous les lives en plein écran",
+  "grid.exitFullscreen": "Quitter le plein écran",
+
+  "info.follow": "Suivre",
+  "info.following": "Suivi",
+  "info.uptime": "Durée du live",
+
+  "chat.title": "Chat du live",
+  "chat.send": "Envoyer",
+  "chat.open": "Ouvrir le chat",
+  "chat.close": "Fermer le chat",
+  "chat.scrollToBottom": "Revenir en bas",
+  "chat.loginToChat": "Connectez-vous pour discuter",
+  "chat.connecting": "Connexion au chat...",
+  "chat.placeholder": "Envoyer un message",
+
+  "player.live": "EN DIRECT",
+  "player.loading": "Chargement du live...",
+  "player.muted": "Son coupé",
+  "player.mutedUnfocused": "Son coupé (vignette non active)",
+  "player.volume": "Volume {percent} %",
+  "player.quality": "Qualité",
+  "player.auto": "Auto",
+
+  "popout.toggleChat": "Afficher ou masquer le chat",
+  "popout.alwaysOnTop": "Toujours au premier plan",
+};

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
+import { formatViewers, useI18n } from "../i18n";
 import { PanelLeft } from "lucide-react";
-import { cn, formatViewers } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { useCollaborations } from "../hooks";
 import { ChannelActionButtons } from "./ChannelActionButtons";
 import type { UserInfo, TopStream, ActiveTab, Collaboration, CollaborationMap } from "../types";
@@ -40,6 +41,7 @@ export function Sidebar({
   topStreams,
   isLoadingBrowse,
 }: SidebarProps) {
+  const { t } = useI18n();
   const channelIds =
     activeTab === "following" ? followedChannels.map((c) => c.id) : topStreams.map((s) => s.broadcaster.id);
   const collabs = useCollaborations(channelIds);
@@ -59,7 +61,7 @@ export function Sidebar({
       >
         {isOpen && (
           <span className="font-bold text-[13px] uppercase tracking-wide text-muted">
-            {activeTab === "following" ? "Followed" : "Top Streams"}
+            {activeTab === "following" ? t("sidebar.followed") : t("sidebar.topStreams")}
           </span>
         )}
         <button
@@ -136,16 +138,17 @@ function FollowingList({
   onAddToGrid,
   onOpenPopout,
 }: FollowingListProps) {
+  const { t } = useI18n();
   if (isLoading) {
     return isSidebarOpen ? (
-      <div className="p-4 text-center text-muted text-sm">Loading...</div>
+      <div className="p-4 text-center text-muted text-sm">{t("sidebar.loading")}</div>
     ) : null;
   }
 
   if (channels.length === 0) {
     return isSidebarOpen ? (
       <div className="p-4 text-center text-muted text-sm">
-        {isLoggedIn ? "No live followed channels" : "Log in to see followed channels"}
+        {isLoggedIn ? t("sidebar.noLiveFollowed") : t("sidebar.loginForFollowed")}
       </div>
     ) : null;
   }
@@ -199,9 +202,10 @@ function TopStreamsList({
   onAddToGrid,
   onOpenPopout,
 }: TopStreamsListProps) {
+  const { t } = useI18n();
   if (isLoading) {
     return isSidebarOpen ? (
-      <div className="p-4 text-center text-muted text-sm">Loading top streams...</div>
+      <div className="p-4 text-center text-muted text-sm">{t("sidebar.loadingTop")}</div>
     ) : null;
   }
 
@@ -260,6 +264,7 @@ function ChannelItem({
   onAddToGrid,
   onOpenPopout,
 }: ChannelItemProps) {
+  const { t, language } = useI18n();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const guest = collab?.guests[0];
   const guestNames = collab?.guests.map((g) => g.displayName).join(", ");
@@ -290,7 +295,7 @@ function ChannelItem({
         className="group/item w-full flex items-center p-2 hover:bg-hover transition-colors"
         title={
           isSidebarOpen
-            ? [guestNames && `Live with ${guestNames}`, "Click to play • Shift+click to add to grid"]
+            ? [guestNames && t("collab.liveWith", { names: guestNames }), canAddToGrid ? t("hint.playOrAdd") : t("hint.playOrPopout")]
                 .filter(Boolean)
                 .join("\n")
             : undefined
@@ -320,7 +325,7 @@ function ChannelItem({
           <div className="ml-3 flex-1 min-w-0 flex flex-col items-start overflow-hidden text-left">
             <span className="font-semibold text-[13px] truncate w-full">{displayName}</span>
             <span className="text-[11px] text-muted truncate w-full italic">
-              {gameName || "Streaming"}
+              {gameName || t("channel.streaming")}
             </span>
           </div>
         )}
@@ -328,7 +333,7 @@ function ChannelItem({
           <div className="flex items-center gap-1 flex-shrink-0 ml-2">
             <div className="w-2 h-2 bg-red-600 rounded-full" />
             <span className="text-[11px] text-muted font-medium">
-              {formatViewers(viewersCount)}
+              {formatViewers(viewersCount, language)}
             </span>
           </div>
         )}
@@ -339,8 +344,8 @@ function ChannelItem({
           className="-translate-y-1/2 bg-elevated text-white px-2 py-1 rounded text-xs z-50 whitespace-nowrap shadow-lg border border-border pointer-events-none"
         >
           {displayName}
-          {viewersCount !== undefined && ` • ${formatViewers(viewersCount)}`}
-          {guestNames && <div className="text-muted">with {guestNames}</div>}
+          {viewersCount !== undefined && ` • ${formatViewers(viewersCount, language)}`}
+          {guestNames && <div className="text-muted">{t("collab.with")} {guestNames}</div>}
         </div>
       )}
 

@@ -1,0 +1,73 @@
+/** Source strings. fr.ts and es.ts must define every key, which the type-checker enforces. */
+export const en = {
+  "nav.home": "Home",
+  "nav.following": "Following",
+  "nav.browse": "Browse",
+  "nav.search": "Search channels...",
+  "nav.login": "Log In",
+  "nav.logout": "Logout",
+  "nav.myProfile": "My profile",
+  "nav.language": "Language",
+  "language.system": "System ({language})",
+
+  "hint.playOrAdd": "Click to play • Shift+click to add to grid",
+  "hint.playOrPopout": "Click to play • Shift+click to open in a new window",
+  "channel.streaming": "Streaming",
+  "channel.offline": "Offline",
+  "channel.offlineLong": "Channel is currently offline",
+  "viewers_one": "{count} viewer",
+  "viewers_other": "{count} viewers",
+
+  "sidebar.followed": "Followed",
+  "sidebar.topStreams": "Top Streams",
+  "sidebar.loading": "Loading...",
+  "sidebar.loadingTop": "Loading top streams...",
+  "sidebar.noLiveFollowed": "No live followed channels",
+  "sidebar.loginForFollowed": "Log in to see followed channels",
+
+  "collab.with": "with",
+  "collab.liveWith": "Live with {names}",
+  "collab.watch": "Watch {name} • Shift+click to add to grid",
+
+  "browse.liveChannels": "Live channels",
+  "browse.topLive": "Top Live Streams",
+  "browse.loading": "Loading streams...",
+  "browse.empty": "No streams found.",
+  "browse.retry": "Retry",
+
+  "actions.addToGrid": "Add to grid",
+  "actions.popout": "Open in new window",
+  "actions.removeTile": "Remove tile",
+
+  "grid.streamCount": "{count} streams",
+  "grid.fullscreen": "Fullscreen",
+  "grid.fullscreenAll": "Fullscreen all streams",
+  "grid.exitFullscreen": "Exit fullscreen",
+
+  "info.follow": "Follow",
+  "info.following": "Following",
+  "info.uptime": "Stream uptime",
+
+  "chat.title": "Stream Chat",
+  "chat.send": "Chat",
+  "chat.open": "Open chat",
+  "chat.close": "Close chat",
+  "chat.scrollToBottom": "Scroll to bottom",
+  "chat.loginToChat": "Log in to chat",
+  "chat.connecting": "Connecting to chat...",
+  "chat.placeholder": "Send a message",
+
+  "player.live": "LIVE",
+  "player.loading": "Loading stream...",
+  "player.muted": "Muted",
+  "player.mutedUnfocused": "Muted (unfocused tile)",
+  "player.volume": "Volume {percent}%",
+  "player.quality": "Quality",
+  "player.auto": "Auto",
+
+  "popout.toggleChat": "Toggle chat",
+  "popout.alwaysOnTop": "Always on top",
+} as const;
+
+export type MessageKey = keyof typeof en;
+export type Messages = Record<MessageKey, string>;

@@ -2,6 +2,8 @@ pub mod twitch;
 pub mod chat;
 pub mod emotes;
 pub mod emote_decoder;
+#[cfg(target_os = "macos")]
+mod menu;
 
 use log::{info, debug, error};
 use std::collections::{HashMap, HashSet};
@@ -162,6 +164,19 @@ async fn get_user_info(state: State<'_, AppState>, login: String) -> Result<serd
 async fn get_users_info(state: State<'_, AppState>, logins: Vec<String>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
     client.get_users_info(logins).await.map_err(|e| e.to_string())
+}
+
+/// Rebuild the macOS menu bar in the UI language. Other platforms have no menu bar.
+#[tauri::command]
+fn set_menu_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let menu = menu::build(&app, &language).map_err(|e| e.to_string())?;
+        app.set_menu(menu).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, language);
+    Ok(())
 }
 
 #[tauri::command]
@@ -751,7 +766,7 @@ pub fn run() {
             get_twitch_global_emotes, get_twitch_channel_emotes,
             login, logout, is_logged_in, update_watch_state, set_access_token,
             search_channels, follow_channel, unfollow_channel, get_top_streams,
-            show_main_window, open_popout,
+            show_main_window, open_popout, set_menu_language,
             emote_decoder::decode_emote
         ])
         .run(tauri::generate_context!())
