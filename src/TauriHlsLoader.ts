@@ -107,7 +107,7 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
   abort(): void {
     this.stats.aborted = true;
     this.cancelInFlight();
-    this.callbacks?.onAbort?.(this.stats, this.context, undefined);
+    this.callbacks?.onAbort?.(this.stats, this.context, null);
   }
 
   load(
@@ -153,7 +153,7 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
         this.callbacks?.onError(
           { code: res.status, text: `HTTP ${res.status}` },
           this.context,
-          undefined,
+          null,
           this.stats,
         );
         return;
@@ -168,7 +168,7 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
       this.releaseAbort(abort);
       if (signal.aborted) return;
       info(`[HlsLoader] fetch failed for ${urlTail}: ${e}`);
-      this.callbacks?.onError({ code: 0, text: String(e) }, this.context, undefined, this.stats);
+      this.callbacks?.onError({ code: 0, text: String(e) }, this.context, null, this.stats);
     }
   }
 
@@ -199,7 +199,7 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
     // on the Rust side. Drop our controller reference BEFORE onSuccess to
     // avoid a sync destroy() call from hls.js firing abort on a freed rid.
     this.releaseAbort(abort);
-    this.callbacks?.onSuccess({ url: this.context.url, data: rewritten }, this.stats, this.context, undefined);
+    this.callbacks?.onSuccess({ url: this.context.url, data: rewritten }, this.stats, this.context, null);
   }
 
   // Reads the body chunk-by-chunk so `stats.loaded` tracks a Twitch prefetch
@@ -245,13 +245,13 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
           const chunkBuf = value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
             ? value.buffer
             : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-          onProgress(this.stats, this.context, chunkBuf, undefined);
+          onProgress(this.stats, this.context, chunkBuf, null);
         }
       }
     } catch (e) {
       if (signal.aborted) return;
       info(`[HlsLoader] stream read failed for ${urlTail}: ${e}`);
-      this.callbacks?.onError({ code: 0, text: String(e) }, this.context, undefined, this.stats);
+      this.callbacks?.onError({ code: 0, text: String(e) }, this.context, null, this.stats);
       return;
     }
 
@@ -288,6 +288,6 @@ export class TauriHlsLoader implements Loader<LoaderContext> {
     this.stats.parsing = { start: now, end: now };
     this.stats.buffering = { start: this.stats.loading.first, first: this.stats.loading.first, end: now };
 
-    this.callbacks?.onSuccess({ url: this.context.url, data }, this.stats, this.context, undefined);
+    this.callbacks?.onSuccess({ url: this.context.url, data }, this.stats, this.context, null);
   }
 }
