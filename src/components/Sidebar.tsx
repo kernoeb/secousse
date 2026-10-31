@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import { cn, formatViewers } from "../lib/utils";
+import { useCollaborations } from "../hooks";
 import { ChannelActionButtons } from "./ChannelActionButtons";
-import type { UserInfo, TopStream, ActiveTab } from "../types";
+import type { UserInfo, TopStream, ActiveTab, Collaboration, CollaborationMap } from "../types";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -39,6 +40,10 @@ export function Sidebar({
   topStreams,
   isLoadingBrowse,
 }: SidebarProps) {
+  const channelIds =
+    activeTab === "following" ? followedChannels.map((c) => c.id) : topStreams.map((s) => s.broadcaster.id);
+  const collabs = useCollaborations(channelIds);
+
   return (
     <aside
       className={cn(
@@ -74,6 +79,7 @@ export function Sidebar({
         {activeTab === "following" ? (
           <FollowingList
             channels={followedChannels}
+            collabs={collabs}
             isLoading={isLoadingFollowed}
             isLoggedIn={isLoggedIn}
             isSidebarOpen={isOpen}
@@ -87,6 +93,7 @@ export function Sidebar({
         ) : (
           <TopStreamsList
             streams={topStreams}
+            collabs={collabs}
             isLoading={isLoadingBrowse}
             isSidebarOpen={isOpen}
             currentChannel={currentChannel}
@@ -104,6 +111,7 @@ export function Sidebar({
 
 interface FollowingListProps {
   channels: UserInfo[];
+  collabs: CollaborationMap;
   isLoading: boolean;
   isLoggedIn: boolean;
   isSidebarOpen: boolean;
@@ -117,6 +125,7 @@ interface FollowingListProps {
 
 function FollowingList({
   channels,
+  collabs,
   isLoading,
   isLoggedIn,
   isSidebarOpen,
@@ -151,6 +160,7 @@ function FollowingList({
           profileImageURL={c.profileImageURL}
           gameName={c.stream?.game?.name}
           viewersCount={c.stream?.viewersCount}
+          collab={collabs[c.id]}
           isActive={currentChannel === c.login}
           isInGrid={gridChannels.includes(c.login)}
           canAddToGrid={canAddToGrid}
@@ -166,6 +176,7 @@ function FollowingList({
 
 interface TopStreamsListProps {
   streams: TopStream[];
+  collabs: CollaborationMap;
   isLoading: boolean;
   isSidebarOpen: boolean;
   currentChannel: string | null;
@@ -178,6 +189,7 @@ interface TopStreamsListProps {
 
 function TopStreamsList({
   streams,
+  collabs,
   isLoading,
   isSidebarOpen,
   currentChannel,
@@ -203,6 +215,7 @@ function TopStreamsList({
           profileImageURL={s.broadcaster.profileImageURL}
           gameName={s.game?.name}
           viewersCount={s.viewersCount}
+          collab={collabs[s.broadcaster.id]}
           isActive={currentChannel === s.broadcaster.login}
           isInGrid={gridChannels.includes(s.broadcaster.login)}
           canAddToGrid={canAddToGrid}
@@ -222,6 +235,7 @@ interface ChannelItemProps {
   profileImageURL: string;
   gameName?: string;
   viewersCount?: number;
+  collab?: Collaboration;
   isActive: boolean;
   isInGrid: boolean;
   canAddToGrid: boolean;
@@ -237,6 +251,7 @@ function ChannelItem({
   profileImageURL,
   gameName,
   viewersCount,
+  collab,
   isActive,
   isInGrid,
   canAddToGrid,
@@ -246,6 +261,8 @@ function ChannelItem({
   onOpenPopout,
 }: ChannelItemProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const guest = collab?.guests[0];
+  const guestNames = collab?.guests.map((g) => g.displayName).join(", ");
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
 
   const handleClick = (e: React.MouseEvent) => {
@@ -270,14 +287,33 @@ function ChannelItem({
         onClick={handleClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={() => setTooltipPos(null)}
-        className="w-full flex items-center p-2 hover:bg-hover transition-colors"
-        title={isSidebarOpen ? "Click to play • Shift+click to add to grid" : undefined}
+        className="group/item w-full flex items-center p-2 hover:bg-hover transition-colors"
+        title={
+          isSidebarOpen
+            ? [guestNames && `Live with ${guestNames}`, "Click to play • Shift+click to add to grid"]
+                .filter(Boolean)
+                .join("\n")
+            : undefined
+        }
       >
-        <div className="w-8 h-8 bg-elevated rounded-full flex-shrink-0 overflow-hidden border border-border">
-          {profileImageURL ? (
-            <img src={profileImageURL} alt={login} />
-          ) : (
-            <div className="w-full h-full bg-elevated" />
+        <div className="relative w-8 h-8 flex-shrink-0">
+          <div className="w-full h-full bg-elevated rounded-full overflow-hidden border border-border">
+            {profileImageURL ? (
+              <img src={profileImageURL} alt={login} />
+            ) : (
+              <div className="w-full h-full bg-elevated" />
+            )}
+          </div>
+          {guest && (
+            // The ring takes the row colour, so it reads as a gap cut into the main avatar.
+            <img
+              src={guest.profileImageURL}
+              alt=""
+              className={cn(
+                "absolute -right-px -bottom-px w-4 h-4 rounded-full bg-elevated ring-2 group-hover/item:ring-hover",
+                isActive ? "ring-elevated" : "ring-surface"
+              )}
+            />
           )}
         </div>
         {isSidebarOpen && (
@@ -304,6 +340,7 @@ function ChannelItem({
         >
           {displayName}
           {viewersCount !== undefined && ` • ${formatViewers(viewersCount)}`}
+          {guestNames && <div className="text-muted">with {guestNames}</div>}
         </div>
       )}
 

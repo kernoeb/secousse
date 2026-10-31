@@ -4,6 +4,7 @@ export { useEmotes } from "./useEmotes";
 export { useSearch } from "./useSearch";
 export { useTopStreams } from "./useTopStreams";
 export { useUserInfo } from "./useUserInfo";
+export { useCollaborations } from "./useCollaborations";
 export { useWindowFullscreen } from "./useWindowFullscreen";
 export { useUpdater } from "./useUpdater";
 export { useIdleTimer } from "./useIdleTimer";

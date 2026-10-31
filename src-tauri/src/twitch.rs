@@ -43,6 +43,41 @@ pub struct TwitchClient {
     device_id: String,
 }
 
+/// Stream Together session of a user, read anonymously. `sharedChatSession` needs a login.
+const COLLAB_FIELDS: &str = r#"
+    channel {
+        collaboration {
+            collaborators {
+                status
+                user { id login displayName profileImageURL(width: 70) stream { id } }
+            }
+        }
+    }
+"#;
+
+/// Turn a user's `COLLAB_FIELDS` into `{ guests }`, the other live streamers, or null.
+fn collaboration(user: &serde_json::Value) -> serde_json::Value {
+    let self_id = user["id"].as_str();
+    // Twitch hides members who left or who are not live, so we do too.
+    let guests: Vec<serde_json::Value> = user["channel"]["collaboration"]["collaborators"]
+        .as_array().into_iter().flatten()
+        .filter(|c| c["status"] == "ACTIVE")
+        .map(|c| &c["user"])
+        .filter(|u| !u["stream"].is_null() && u["id"].as_str() != self_id)
+        .map(|u| serde_json::json!({
+            "id": u["id"],
+            "login": u["login"],
+            "displayName": u["displayName"],
+            "profileImageURL": u["profileImageURL"],
+        }))
+        .collect();
+    if guests.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({ "guests": guests })
+    }
+}
+
 impl TwitchClient {
     pub fn new(access_token: Option<String>, device_id: Option<String>) -> Self {
         let device_id = device_id.unwrap_or_else(|| Uuid::new_v4().to_string().replace("-", "")[..32].to_string());
@@ -139,9 +174,10 @@ impl TwitchClient {
                             displayName
                         }
                     }
+                    COLLAB_FIELDS
                 }
             }
-        "#;
+        "#.replace("COLLAB_FIELDS", COLLAB_FIELDS);
 
         let payload = serde_json::json!({
             "query": query,
@@ -155,12 +191,11 @@ impl TwitchClient {
             .await?;
 
         let gql_res = res.json::<GQLResponse<serde_json::Value>>().await?;
-        if let Some(data) = gql_res.data {
-            if !data["user"].is_null() {
-                return Ok(data);
-            }
-        }
-        Err(anyhow::anyhow!("User not found: {:?}", gql_res.errors))
+        let Some(mut data) = gql_res.data.filter(|d| !d["user"].is_null()) else {
+            return Err(anyhow::anyhow!("User not found: {:?}", gql_res.errors));
+        };
+        data["user"]["collaboration"] = collaboration(&data["user"]);
+        Ok(data)
     }
 
     pub async fn get_users_info(&self, logins: Vec<String>) -> Result<serde_json::Value> {
@@ -197,6 +232,44 @@ impl TwitchClient {
             return Ok(data);
         }
         Err(anyhow::anyhow!("GQL Error: {:?}", gql_res.errors))
+    }
+
+    /// Map each channel in a Stream Together session to the other streamers in it.
+    /// Channels not in a session are left out. One request covers every id.
+    pub async fn get_collaborations(&self, channel_ids: Vec<String>) -> Result<serde_json::Value> {
+        let query = r#"
+            query GetCollaborations($ids: [ID!]) {
+                users(ids: $ids) {
+                    id
+                    COLLAB_FIELDS
+                }
+            }
+        "#.replace("COLLAB_FIELDS", COLLAB_FIELDS);
+
+        let payload = serde_json::json!({
+            "query": query,
+            "variables": { "ids": channel_ids }
+        });
+
+        let res = self.client.post(GQL_URL)
+            .headers(self.gql_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let gql_res = res.json::<GQLResponse<serde_json::Value>>().await?;
+        let Some(data) = gql_res.data else {
+            return Err(anyhow::anyhow!("GQL Error: {:?}", gql_res.errors));
+        };
+
+        let mut out = serde_json::Map::new();
+        for user in data["users"].as_array().into_iter().flatten() {
+            let (Some(id), collab) = (user["id"].as_str(), collaboration(user)) else { continue };
+            if !collab.is_null() {
+                out.insert(id.to_string(), collab);
+            }
+        }
+        Ok(serde_json::Value::Object(out))
     }
 
     /// Get current user info using Helix API (requires authentication)

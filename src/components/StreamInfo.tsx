@@ -9,9 +9,13 @@ interface StreamInfoProps {
   isFollowing: boolean;
   isLoggedIn: boolean;
   onFollow: () => void;
+  onSelectChannel: (login: string) => void;
+  onAddToGrid: (login: string) => void;
 }
 
-export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollow }: StreamInfoProps) {
+export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollow, onSelectChannel, onAddToGrid }: StreamInfoProps) {
+  const guests = userInfo?.collaboration?.guests ?? [];
+
   return (
     <div className="bg-surface p-4 flex items-start gap-4 border-t border-border">
       <div className="w-16 h-16 bg-elevated rounded-full flex-shrink-0 overflow-hidden border-2 border-twitch shadow-lg shadow-twitch/10">
@@ -21,10 +25,26 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
         <h1 className="text-lg font-bold truncate leading-tight tracking-tight">
           {userInfo?.stream?.title || `${channel} - Streaming`}
         </h1>
-        <div className="flex items-center gap-2 mt-1 text-sm">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-sm">
           <span className="text-twitch font-bold hover:underline cursor-pointer">
             {userInfo?.displayName || channel}
           </span>
+          {guests.length > 0 && (
+            <>
+              <span className="text-muted">with</span>
+              {guests.map((g) => (
+                <button
+                  key={g.id}
+                  onClick={(e) => (e.shiftKey ? onAddToGrid(g.login) : onSelectChannel(g.login))}
+                  className="flex items-center gap-1 text-twitch font-bold hover:underline cursor-pointer"
+                  title={`Watch ${g.displayName} • Shift+click to add to grid`}
+                >
+                  <img src={g.profileImageURL} alt="" className="w-4 h-4 rounded-full" />
+                  {g.displayName}
+                </button>
+              ))}
+            </>
+          )}
           <span className="text-muted opacity-50">&bull;</span>
           <span className="text-twitch hover:underline cursor-pointer font-semibold">
             {userInfo?.stream?.game?.displayName || "Just Chatting"}

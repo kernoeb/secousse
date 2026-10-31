@@ -33,7 +33,25 @@ export interface UserInfo {
   displayName: string;
   profileImageURL: string;
   stream?: StreamInfo;
+  /** Set by get_user_info only, and null when the channel streams alone. */
+  collaboration?: Collaboration | null;
 }
+
+/** Another streamer live in the same Stream Together session. */
+export interface CollabGuest {
+  id: string;
+  login: string;
+  displayName: string;
+  profileImageURL: string;
+}
+
+/** A channel's Stream Together session, from get_user_info or get_collaborations. */
+export interface Collaboration {
+  guests: CollabGuest[];
+}
+
+/** Response from get_collaborations, keyed by channel id. */
+export type CollaborationMap = Record<string, Collaboration>;
 
 /** Self (logged-in user) information from GQL viewer query */
 export interface SelfInfo {

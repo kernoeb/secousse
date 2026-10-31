@@ -322,6 +322,8 @@ export default function App() {
                   isFollowing={isFollowing}
                   isLoggedIn={isLoggedIn}
                   onFollow={handleFollow}
+                  onSelectChannel={selectChannel}
+                  onAddToGrid={addToGrid}
                 />
               )}
             </>
