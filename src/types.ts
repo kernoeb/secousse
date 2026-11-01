@@ -23,7 +23,15 @@ export interface StreamInfo {
   viewersCount: number;
   /** ISO 8601 start time of the broadcast. */
   createdAt?: string;
+  /** The VOD being recorded, from get_user_info. Null when the channel keeps no VODs. */
+  archiveVideo?: { id: string } | null;
   game?: Game;
+}
+
+/** Response from get_vod_playback. */
+export interface VodPlayback {
+  url: string;
+  lengthSeconds: number;
 }
 
 /** User/Channel information */

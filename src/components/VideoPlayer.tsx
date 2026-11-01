@@ -3,8 +3,9 @@ import { useI18n } from "../i18n";
 import Hls from "hls.js";
 import { invoke } from "@tauri-apps/api/core";
 import { debug, info, error as logError } from "@tauri-apps/plugin-log";
-import { Play, Pause, Volume2, VolumeX, Settings, Maximize, Minimize, Loader2 } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Settings, Maximize, Minimize, Loader2, RotateCcw, RotateCw } from "lucide-react";
 import { TauriHlsLoader } from "../TauriHlsLoader";
+import { SeekBar, formatBehind } from "./SeekBar";
 import { useIdleTimer } from "../hooks";
 import {
   cn,
@@ -16,9 +17,21 @@ import {
   getInitialPreferredQualityHeight,
   persistPreferredQualityHeight,
 } from "../lib/utils";
-import type { UserInfo, QualityLevel } from "../types";
+import type { UserInfo, QualityLevel, VodPlayback } from "../types";
 
 const VIDEO_STYLE: React.CSSProperties = { transform: "translateZ(0)" };
+// WebKit draws the current frame shrunk for a moment when the loading overlay
+// covers a playing video, so the video is hidden while a source loads.
+const VIDEO_STYLE_LOADING: React.CSSProperties = { ...VIDEO_STYLE, visibility: "hidden" };
+
+// Rewinding plays the VOD Twitch records during the stream. Too close to its
+// end, hls.js has no segment to buffer ahead and stalls.
+const VOD_EDGE_MARGIN = 15;
+// hls.js treats the VOD as a live playlist and will not load its first
+// segments, so a seek before this point waits forever.
+const VOD_START_MARGIN = 30;
+// A click on the timeline this close to "now" means "stay live".
+const LIVE_SNAP = 15;
 
 interface VideoPlayerProps {
   channel: string;
@@ -28,6 +41,8 @@ interface VideoPlayerProps {
   forceMuted?: boolean;
   compact?: boolean;
   onRequestFocus?: () => void;
+  /** Whether the arrow keys seek this player. Only the focused grid tile gets them. */
+  hotkeys?: boolean;
 }
 
 export function VideoPlayer({
@@ -38,6 +53,7 @@ export function VideoPlayer({
   forceMuted = false,
   compact = false,
   onRequestFocus,
+  hotkeys = true,
 }: VideoPlayerProps) {
   const { t, viewers } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -52,11 +68,41 @@ export function VideoPlayer({
   const [currentQuality, setCurrentQuality] = useState<number>(AUTO_QUALITY);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isLoadingStream, setIsLoadingStream] = useState(true);
+  // Rewinding or going back to live keeps the last frame on screen while the
+  // other playlist loads, instead of a black screen.
+  const freezeRef = useRef<HTMLCanvasElement>(null);
+  const [frozen, setFrozen] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const { isActive, markActive, reset: resetIdle } = useIdleTimer(2500);
 
   const showOverlay = isActive || isPaused || showQualityMenu;
 
-  useEffect(() => { setIsLoadingStream(true); }, [channel]);
+  // Rewind state is tagged with its stream, so the first render after a
+  // channel switch or a new broadcast is already back to live.
+  const streamKey = `${channel}:${userInfo?.stream?.id ?? ""}`;
+  const archiveId = userInfo?.stream?.archiveVideo?.id ?? null;
+  const [vodSession, setVodSession] = useState<{ key: string; vodId: string } | null>(null);
+  const [vodBlockedKey, setVodBlockedKey] = useState<string | null>(null);
+  const vodId = vodSession?.key === streamKey ? vodSession.vodId : null;
+  // Without this, coming back to the same broadcast would resume the old rewind.
+  useEffect(() => { setVodSession(null); }, [streamKey]);
+  const vodTargetRef = useRef(0);
+  const vodLoadStoppedRef = useRef(false);
+  const [vodPosition, setVodPosition] = useState(0);
+  const [vodEdge, setVodEdge] = useState(0);
+  const createdAtMs = userInfo?.stream?.createdAt ? Date.parse(userInfo.stream.createdAt) : NaN;
+  // A rewound player keeps its controls even if the archive id disappears, or it could not go back to live.
+  const showTimeline = !Number.isNaN(createdAtMs) && (!!vodId || (!!archiveId && vodBlockedKey !== streamKey));
+  const [nowMs, setNowMs] = useState(Date.now);
+  useEffect(() => {
+    if (!showTimeline || !showOverlay) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [showTimeline, showOverlay]);
+  const elapsed = Math.max(0, (nowMs - createdAtMs) / 1000);
+
+  useEffect(() => { setIsLoadingStream(true); setFrozen(false); setIsBuffering(false); }, [channel]);
   useEffect(() => {
     if (userInfo && !userInfo.stream) setIsLoadingStream(false);
   }, [userInfo]);
@@ -99,10 +145,24 @@ export function VideoPlayer({
     let cancelled = false;
     info(`[VideoPlayer] effect fired: channel=${channel} streamId=${userInfo.stream.id}`);
 
+    const key = `${channel}:${userInfo.stream.id}`;
+
     async function loadStream() {
       try {
-        const url: string = await invoke("get_stream_url", { login: channel });
-        info(`[VideoPlayer] got url len=${url.length}`);
+        let url: string;
+        let startAt = 0;
+        if (vodId) {
+          const vod: VodPlayback = await invoke("get_vod_playback", { vodId });
+          url = vod.url;
+          const latest = vod.lengthSeconds > 0 ? vod.lengthSeconds - VOD_EDGE_MARGIN : Infinity;
+          startAt = Math.max(VOD_START_MARGIN, Math.min(vodTargetRef.current, latest));
+          setVodEdge(vod.lengthSeconds);
+          setVodPosition(startAt);
+          vodLoadStoppedRef.current = false;
+        } else {
+          url = await invoke("get_stream_url", { login: channel });
+        }
+        info(`[VideoPlayer] got url len=${url.length} vod=${vodId ?? "none"}`);
 
         if (cancelled || !videoRef.current) {
           info(`[VideoPlayer] aborted before HLS init: cancelled=${cancelled} videoRef=${!!videoRef.current}`);
@@ -120,13 +180,21 @@ export function VideoPlayer({
         // expectations that never matched the wire. The latency win comes from
         // promotePrefetches() in TauriHlsLoader, which starts the fetch of a
         // segment while the encoder is still producing it.
-        const hls = new Hls({
+        const baseConfig = {
           loader: TauriHlsLoader,
           enableWorker: true,
           backBufferLength: 30,
+          abrEwmaDefaultEstimate: 5_000_000,
+        };
+        const hls = new Hls(vodId ? {
+          ...baseConfig,
+          // hls.js treats the VOD's EVENT playlist as live. The default max
+          // latency of Infinity is what stops it jumping back to the edge.
+          startPosition: startAt,
+        } : {
+          ...baseConfig,
           liveSyncDuration: 4,
           liveMaxLatencyDuration: 15,
-          abrEwmaDefaultEstimate: 5_000_000,
           // Twitch signs every EXT-X-TWITCH-PREFETCH URL separately, so a
           // prefetch we promoted to an EXTINF segment reappears in the next
           // playlist under a different path at the same media sequence
@@ -156,6 +224,15 @@ export function VideoPlayer({
             info(`[VideoPlayer] HLS error type=${data.type} details=${data.details} fatal=${data.fatal}`);
             errorLogCount++;
             if (errorLogCount === 6) info(`[VideoPlayer] (further HLS errors suppressed)`);
+          }
+          if (data.fatal && vodId && hls.levels.length === 0) {
+            // Usher refused the VOD playlist (sub-only or deleted): go back to live.
+            // A timeout is not a refusal, so it leaves the timeline for a retry.
+            hls.destroy();
+            const status = data.response?.code ?? 0;
+            if (status >= 400 && status < 500) setVodBlockedKey(key);
+            setVodSession(null);
+            return;
           }
           if (data.fatal) {
             switch (data.type) {
@@ -220,11 +297,17 @@ export function VideoPlayer({
         const onPlaying = () => info(`[VideoPlayer] <video> playing readyState=${video.readyState}`);
         const onWaiting = () => info(`[VideoPlayer] <video> waiting readyState=${video.readyState}`);
         const onStalled = () => info(`[VideoPlayer] <video> stalled`);
+
         const onVideoError = () => info(`[VideoPlayer] <video> error code=${video.error?.code} msg=${video.error?.message}`);
         // First decoded frame — that's when the black screen actually ends.
         // MANIFEST_PARSED is too early: the spinner disappears but no frame
         // has been demuxed and decoded yet.
-        const onLoadedData = () => setIsLoadingStream(false);
+        const onLoadedData = () => {
+          setIsLoadingStream(false);
+          setFrozen(false);
+          // Rewinds pressed while the VOD was loading moved the target further back.
+          if (vodId && vodTargetRef.current < video.currentTime - 1) video.currentTime = vodTargetRef.current;
+        };
         video.addEventListener("playing", onPlaying);
         video.addEventListener("waiting", onWaiting);
         video.addEventListener("stalled", onStalled);
@@ -246,12 +329,22 @@ export function VideoPlayer({
         hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
           debug(`[VideoPlayer] Quality switched to level: ${data.level}`);
         });
+        if (vodId) {
+          hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => setVodEdge(data.details.edge));
+        }
 
         hls.loadSource(url);
         hls.attachMedia(videoRef.current);
         hlsRef.current = hls;
       } catch (err) {
         logError(`[VideoPlayer] Failed to load stream: ${err}`);
+        if (cancelled) return;
+        if (vodId) {
+          // Sub-only or missing VOD: hide the timeline. Any other error only goes back to live.
+          if (/restricted|No VOD token/.test(String(err))) setVodBlockedKey(key);
+          setVodSession(null);
+          return;
+        }
         setIsLoadingStream(false);
       }
     }
@@ -269,7 +362,7 @@ export function VideoPlayer({
         listenersCleanupRef.current = null;
       }
     };
-  }, [channel, userInfo?.stream?.id, setIsLoadingStream]);
+  }, [channel, userInfo?.stream?.id, vodId, setIsLoadingStream]);
 
   const changeQuality = useCallback((levelId: number) => {
     const hls = hlsRef.current;
@@ -325,6 +418,87 @@ export function VideoPlayer({
     }
   }, [compact]);
 
+  const freezeFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = freezeRef.current;
+    if (!video || !canvas || video.readyState < 2 || !video.videoWidth) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    setFrozen(true);
+  }, []);
+
+  const goLive = useCallback(() => {
+    freezeFrame();
+    setVodSession(null);
+    setIsLoadingStream(true);
+  }, [freezeFrame]);
+
+  // `target` is in seconds from stream start, which is also the VOD's own time.
+  const seekStream = (target: number) => {
+    if (!vodId) {
+      if (!archiveId) return;
+      vodTargetRef.current = Math.max(VOD_START_MARGIN, target);
+      setVodPosition(vodTargetRef.current);
+      freezeFrame();
+      setVodSession({ key: streamKey, vodId: archiveId });
+      setIsLoadingStream(true);
+      return;
+    }
+    // vodEdge is stale until the VOD playlist loads, so it cannot end a rewind yet.
+    if (!isLoadingStream && target >= vodEdge - VOD_EDGE_MARGIN) {
+      goLive();
+      return;
+    }
+    vodTargetRef.current = Math.max(VOD_START_MARGIN, target);
+    setVodPosition(vodTargetRef.current);
+    const video = videoRef.current;
+    // Until the first frame, currentTime is 0; the target is applied on loadeddata.
+    if (!video || isLoadingStream) return;
+    video.currentTime = vodTargetRef.current;
+    setVodPosition(video.currentTime);
+    // Loading stops on pause; load the new position so its frame shows.
+    if (video.paused && hlsRef.current) {
+      vodLoadStoppedRef.current = false;
+      hlsRef.current.startLoad(video.currentTime);
+    }
+  };
+
+  const skip = (seconds: number) => {
+    const from = !vodId ? (Date.now() - createdAtMs) / 1000
+      : isLoadingStream ? vodTargetRef.current
+      : videoRef.current?.currentTime ?? vodPosition;
+    seekStream(from + seconds);
+  };
+
+  const skipRef = useRef(skip);
+  skipRef.current = skip;
+  const canSeekRef = useRef(false);
+  canSeekRef.current = showTimeline;
+  const isRewoundRef = useRef(false);
+  isRewoundRef.current = !!vodId;
+  const markActiveRef = useRef(markActive);
+  markActiveRef.current = markActive;
+
+  useEffect(() => {
+    if (!hotkeys) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      // Leave the arrows to text fields and the volume slider.
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || el.closest("input, textarea, select, [role=slider]"))) return;
+      if (!canSeekRef.current) return;
+      // Live is already the furthest point, so only a rewound player moves forward.
+      if (e.key === "ArrowRight" && !isRewoundRef.current) return;
+      e.preventDefault();
+      markActiveRef.current();
+      skipRef.current(e.key === "ArrowLeft" ? -10 : 10);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [hotkeys]);
+
   const volumePercent = Math.round((isMuted ? 0 : volume) * 100);
 
   if (userInfo && !userInfo.stream && !isLoadingStream) {
@@ -360,7 +534,7 @@ export function VideoPlayer({
     >
       <video
         ref={videoRef}
-        style={VIDEO_STYLE}
+        style={isLoadingStream ? VIDEO_STYLE_LOADING : VIDEO_STYLE}
         className="w-full h-full object-contain shadow-2xl"
         autoPlay
         playsInline
@@ -370,12 +544,25 @@ export function VideoPlayer({
         }}
         onPlay={() => {
           setIsPaused(false);
-          hlsRef.current?.startLoad(-1);
+          if (!vodId) {
+            hlsRef.current?.startLoad(-1);
+          } else if (vodLoadStoppedRef.current) {
+            // Only after our own stopLoad: on the first play no fragment is
+            // loaded yet, and startLoad(-1) would skip the rewind target.
+            vodLoadStoppedRef.current = false;
+            hlsRef.current?.startLoad(-1);
+          }
         }}
+        onWaiting={() => setIsBuffering(true)}
+        onPlaying={() => setIsBuffering(false)}
+        onCanPlay={() => setIsBuffering(false)}
         onPause={() => {
           setIsPaused(true);
+          setIsBuffering(false);
           hlsRef.current?.stopLoad();
+          if (vodId) vodLoadStoppedRef.current = true;
         }}
+        onTimeUpdate={vodId && showOverlay ? (e) => setVodPosition(Math.floor(e.currentTarget.currentTime)) : undefined}
         onVolumeChange={(e) => {
           const video = e.currentTarget;
           setIsMuted(video.muted);
@@ -384,13 +571,25 @@ export function VideoPlayer({
         onDoubleClick={() => setIsFullscreen?.(!isFullscreen)}
       />
 
+      <canvas
+        ref={freezeRef}
+        className={cn(
+          "absolute inset-0 w-full h-full object-contain pointer-events-none",
+          !(frozen && isLoadingStream) && "hidden"
+        )}
+      />
+
       {/* Loading overlay */}
-      {isLoadingStream && (
+      {isLoadingStream && !frozen ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="w-10 h-10 text-twitch animate-spin" />
             <span className="text-white text-sm">{t("player.loading")}</span>
           </div>
+        </div>
+      ) : (isLoadingStream || isBuffering) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Loader2 className="w-10 h-10 text-twitch animate-spin drop-shadow-lg" />
         </div>
       )}
 
@@ -399,8 +598,11 @@ export function VideoPlayer({
           "absolute top-4 left-4 flex items-center gap-2 transition-opacity",
           showOverlay ? "opacity-100" : "opacity-0 pointer-events-none"
         )}>
-          <div className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
-            <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+          <div className={cn(
+            "text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1",
+            vodId ? "bg-black/70" : "bg-red-600"
+          )}>
+            <div className={cn("w-2 h-2 bg-white rounded-full", vodId ? "opacity-50" : "animate-pulse")} />
             {t("player.live")}
           </div>
           <div className="bg-black/70 text-white text-xs px-2 py-1 rounded">
@@ -414,6 +616,17 @@ export function VideoPlayer({
         "absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 transition-opacity",
         showOverlay ? "opacity-100" : "opacity-0 pointer-events-none"
       )}>
+        {showTimeline && (
+          <div className="px-2">
+            <SeekBar
+              duration={elapsed}
+              position={vodId ? vodPosition : elapsed}
+              onSeek={(target) => {
+                if (vodId || target < elapsed - LIVE_SNAP) seekStream(target);
+              }}
+            />
+          </div>
+        )}
         <div className="flex items-center gap-1">
           {/* Play/Pause Button */}
           <button onClick={togglePlayPause} className="p-2 hover:bg-white/20 rounded transition-colors">
@@ -471,6 +684,43 @@ export function VideoPlayer({
               />
             </div>
           </div>
+
+          {showTimeline && (
+            <>
+              {[30, 10].map((seconds) => (
+                <button
+                  key={seconds}
+                  onClick={() => skip(-seconds)}
+                  title={t("player.rewind", { seconds })}
+                  className="p-2 hover:bg-white/20 rounded transition-colors flex items-center gap-0.5 text-white text-xs"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  {seconds}
+                </button>
+              ))}
+              {vodId && (
+                <>
+                  <button
+                    onClick={() => skip(10)}
+                    title={t("player.forward", { seconds: 10 })}
+                    className="p-2 hover:bg-white/20 rounded transition-colors flex items-center gap-0.5 text-white text-xs"
+                  >
+                    10
+                    <RotateCw className="w-4 h-4" />
+                  </button>
+                  <span className="px-1 text-white text-xs tabular-nums">{formatBehind(elapsed - vodPosition)}</span>
+                  <button
+                    onClick={goLive}
+                    title={t("player.backToLive")}
+                    className="px-2 py-1 hover:bg-white/20 rounded transition-colors flex items-center gap-1 text-white text-xs font-bold"
+                  >
+                    <div className="w-2 h-2 bg-white/50 rounded-full" />
+                    {t("player.live")}
+                  </button>
+                </>
+              )}
+            </>
+          )}
 
           <div className="flex-1" />
 

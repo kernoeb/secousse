@@ -72,6 +72,10 @@ export const en = {
   "player.volume": "Volume {percent}%",
   "player.quality": "Quality",
   "player.auto": "Auto",
+  "player.backToLive": "Back to live",
+  "player.rewind": "Back {seconds} s",
+  "player.forward": "Forward {seconds} s",
+  "player.timeline": "Stream timeline",
 
   "popout.toggleChat": "Toggle chat",
   "popout.alwaysOnTop": "Always on top",

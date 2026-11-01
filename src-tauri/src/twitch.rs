@@ -78,6 +78,20 @@ fn collaboration(user: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Sub-only VODs still return a token, but one that usher refuses.
+fn token_forbidden(value: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(value)
+        .map(|v| v["authorization"]["forbidden"] == true)
+        .unwrap_or(false)
+}
+
+fn vod_usher_url(vod_id: &str, token: &AccessToken) -> String {
+    format!(
+        "https://usher.ttvnw.net/vod/{}.m3u8?allow_source=true&sig={}&token={}",
+        urlencoding::encode(vod_id), token.signature, urlencoding::encode(&token.value)
+    )
+}
+
 impl TwitchClient {
     pub fn new(access_token: Option<String>, device_id: Option<String>) -> Self {
         let device_id = device_id.unwrap_or_else(|| Uuid::new_v4().to_string().replace("-", "")[..32].to_string());
@@ -169,6 +183,7 @@ impl TwitchClient {
                         title
                         viewersCount
                         createdAt
+                        archiveVideo { id }
                         game {
                             id
                             displayName
@@ -387,6 +402,39 @@ impl TwitchClient {
                     "edges": edges
                 }
             }
+        }))
+    }
+
+    /// Usher URL and current length of a VOD. One request carries both the
+    /// token and the length, so a rewind costs a single round trip.
+    pub async fn get_vod_playback(&self, vod_id: &str) -> Result<serde_json::Value> {
+        let query = r#"
+            query VodPlayback($id: ID!) {
+                video(id: $id) { lengthSeconds }
+                videoPlaybackAccessToken(id: $id, params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) {
+                    value
+                    signature
+                }
+            }
+        "#;
+        let payload = serde_json::json!({ "query": query, "variables": { "id": vod_id } });
+
+        let res = self.client.post(GQL_URL)
+            .headers(self.gql_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let gql_res = res.json::<GQLResponse<serde_json::Value>>().await?;
+        let data = gql_res.data.unwrap_or_default();
+        let token: AccessToken = serde_json::from_value(data["videoPlaybackAccessToken"].clone())
+            .map_err(|_| anyhow::anyhow!("No VOD token: {:?}", gql_res.errors))?;
+        if token_forbidden(&token.value) {
+            return Err(anyhow::anyhow!("VOD {} is restricted", vod_id));
+        }
+        Ok(serde_json::json!({
+            "url": vod_usher_url(vod_id, &token),
+            "lengthSeconds": data["video"]["lengthSeconds"].as_f64().unwrap_or(0.0),
         }))
     }
 
@@ -745,5 +793,26 @@ impl TwitchClient {
             return Ok(data);
         }
         Err(anyhow::anyhow!("GQL Error: {:?}", gql_res.errors))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forbidden_token_is_detected() {
+        assert!(token_forbidden(r#"{"authorization":{"forbidden":true,"reason":"sub only"}}"#));
+        assert!(!token_forbidden(r#"{"authorization":{"forbidden":false,"reason":""}}"#));
+        assert!(!token_forbidden("not json"));
+    }
+
+    #[test]
+    fn vod_url_encodes_the_token() {
+        let token = AccessToken { signature: "abc".into(), value: r#"{"vod_id":1}"#.into() };
+        assert_eq!(
+            vod_usher_url("42", &token),
+            "https://usher.ttvnw.net/vod/42.m3u8?allow_source=true&sig=abc&token=%7B%22vod_id%22%3A1%7D"
+        );
     }
 }

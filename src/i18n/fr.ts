@@ -73,6 +73,10 @@ export const fr: Messages = {
   "player.volume": "Volume {percent} %",
   "player.quality": "Qualité",
   "player.auto": "Auto",
+  "player.backToLive": "Revenir au direct",
+  "player.rewind": "Reculer de {seconds} s",
+  "player.forward": "Avancer de {seconds} s",
+  "player.timeline": "Chronologie du live",
 
   "popout.toggleChat": "Afficher ou masquer le chat",
   "popout.alwaysOnTop": "Toujours au premier plan",

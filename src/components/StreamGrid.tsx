@@ -113,6 +113,7 @@ function StreamGridTile({
         forceMuted={isMulti && !isFocused}
         compact={isMulti}
         onRequestFocus={onRequestFocus}
+        hotkeys={!isMulti || isFocused}
       />
 
       {isMulti && (

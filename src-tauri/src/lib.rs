@@ -155,6 +155,12 @@ async fn get_stream_url(state: State<'_, AppState>, login: String) -> Result<Str
 }
 
 #[tauri::command]
+async fn get_vod_playback(state: State<'_, AppState>, vod_id: String) -> Result<serde_json::Value, String> {
+    let client = state.twitch_client.lock().await.clone();
+    client.get_vod_playback(&vod_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_user_info(state: State<'_, AppState>, login: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
     client.get_user_info(&login).await.map_err(|e| e.to_string())
@@ -767,7 +773,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_stream_url, connect_to_chat, disconnect_from_chat, send_chat_message,
+            get_stream_url, get_vod_playback, connect_to_chat, disconnect_from_chat, send_chat_message,
             get_user_info, get_users_info, get_collaborations, get_self_info, get_followed_channels,
             get_channel_emotes, get_global_emotes, get_global_badges, get_channel_badges,
             get_twitch_global_emotes, get_twitch_channel_emotes,

@@ -113,6 +113,14 @@ The macOS menu bar is rebuilt in Rust (`src-tauri/src/menu.rs`) through `set_men
 
 When the video is paused, HLS.js segment fetching is stopped (`hls.stopLoad()`) via `onPause`/`onPlay` video events to prevent buffer churn. The error handler guards `startLoad()` against `videoRef.current?.paused` to avoid silently resuming during intentional pause.
 
+## Rewind
+
+A live channel that keeps VODs can be rewound to any point since the stream started. `get_user_info` already returns `stream.archiveVideo { id }`, the VOD Twitch records during the broadcast, so the timeline costs no extra request; it shows only when that id is set. Nothing else happens until the user rewinds. Then `get_vod_playback(vodId)` sends one GQL request for both the VOD token and `video.lengthSeconds`, and returns the usher `vod/<id>.m3u8` URL. A sub-only VOD (`authorization.forbidden`) or a VOD playlist that usher refuses with a 4xx hides the timeline for that broadcast. Any other failure, such as a timeout, only goes back to live and keeps the timeline. The VOD time is the offset from stream start (the first segment starts about 3 s after `createdAt`), and the VOD measured about 10 s behind the live edge.
+
+`VideoPlayer` holds a `vodSession` tagged with `channel:streamId`, so a channel switch or a new broadcast is back to live. Entering or leaving VOD mode rebuilds hls.js; a seek inside the VOD only sets `currentTime`. A target within `VOD_EDGE_MARGIN` (15 s) of the VOD's end goes back to live. Targets are never earlier than `VOD_START_MARGIN` (30 s): because the playlist looks live, hls.js will not load its first segments, and a seek to 0 waits forever. The VOD playlist is `EVENT` with no `ENDLIST`, which hls.js treats as live. So the VOD config leaves `liveSyncDuration` and `liveMaxLatencyDuration` at their defaults. The default max latency of Infinity is what stops hls.js from jumping back to the edge. Do not copy the live config into the VOD one. Its segments are 10 s MPEG-TS or fMP4 (depending on the channel) on CloudFront, with no prefetch tags, so `promotePrefetches()` leaves them as they are. In VOD mode `onPlay` calls `startLoad(-1)` only after its own `stopLoad()`: on the first play no fragment is loaded yet, and `startLoad(-1)` then starts at the VOD's live edge instead of the rewind target.
+
+Left and Right arrows seek 10 s in the player that has `hotkeys` (the only one, or the focused grid tile), unless a text field or slider has focus. Until the VOD's first frame, `currentTime` is 0 and `vodEdge` is stale, so seeks made while it loads only move `vodTargetRef`; `loadeddata` applies the target if it moved further back.
+
 ## Dev tooling
 
 - `src/lib/spamSim.ts` exposes `window.__spam.start({rate, emotesPerMsg, durationSec})` / `__spam.stop()` in dev builds, useful for stress-testing the chat renderer.

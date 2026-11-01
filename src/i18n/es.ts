@@ -73,6 +73,10 @@ export const es: Messages = {
   "player.volume": "Volumen {percent} %",
   "player.quality": "Calidad",
   "player.auto": "Auto",
+  "player.backToLive": "Volver al directo",
+  "player.rewind": "Retroceder {seconds} s",
+  "player.forward": "Avanzar {seconds} s",
+  "player.timeline": "Línea de tiempo del directo",
 
   "popout.toggleChat": "Mostrar u ocultar el chat",
   "popout.alwaysOnTop": "Siempre visible",
