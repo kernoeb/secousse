@@ -110,10 +110,10 @@ function StreamCard({ stream, canAddToGrid, onSelect, onAddToGrid, onOpenPopout 
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-sm truncate group-hover:text-twitch transition-colors">
+            <h3 className="select-text font-semibold text-sm truncate group-hover:text-twitch transition-colors">
               {stream.title}
             </h3>
-            <p className="text-muted text-sm truncate">{stream.broadcaster.displayName}</p>
+            <p className="select-text text-muted text-sm truncate">{stream.broadcaster.displayName}</p>
             <p className="text-muted text-xs truncate">{stream.game?.displayName || t("channel.streaming")}</p>
           </div>
         </div>

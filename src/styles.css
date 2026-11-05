@@ -38,6 +38,8 @@ html, body {
 
 body {
   margin: 0;
+  -webkit-user-select: none;
+  user-select: none;
   display: flex;
   min-width: 320px;
   height: 100vh;
@@ -45,6 +47,12 @@ body {
 
 #root {
   width: 100%;
+}
+
+/* The UI is not selectable, like a native app. Text worth copying opts back in with `select-text`. */
+input, textarea, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .scrollbar-thin {

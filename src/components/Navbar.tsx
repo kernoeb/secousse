@@ -173,7 +173,7 @@ export function Navbar({
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm truncate">{result.displayName}</div>
+                      <div className="select-text font-semibold text-sm truncate">{result.displayName}</div>
                       {result.stream ? (
                         <div className="flex items-center gap-2 text-xs text-muted">
                           <span className="flex items-center gap-1">

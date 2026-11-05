@@ -24,11 +24,11 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
         {userInfo?.profileImageURL && <img src={userInfo.profileImageURL} alt="pfp" />}
       </div>
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg font-bold truncate leading-tight tracking-tight">
+        <h1 className="select-text text-lg font-bold truncate leading-tight tracking-tight">
           {userInfo?.stream?.title || `${channel} - Streaming`}
         </h1>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-sm">
-          <span className="text-twitch font-bold hover:underline cursor-pointer">
+          <span className="select-text text-twitch font-bold hover:underline cursor-pointer">
             {userInfo?.displayName || channel}
           </span>
           {guests.length > 0 && (
@@ -38,7 +38,7 @@ export function StreamInfo({ channel, userInfo, isFollowing, isLoggedIn, onFollo
                 <button
                   key={g.id}
                   onClick={(e) => (e.shiftKey ? onAddToGrid(g.login) : onSelectChannel(g.login))}
-                  className="flex items-center gap-1 text-twitch font-bold hover:underline cursor-pointer"
+                  className="select-text flex items-center gap-1 text-twitch font-bold hover:underline cursor-pointer"
                   title={t("collab.watch", { name: g.displayName })}
                 >
                   <img src={g.profileImageURL} alt="" className="w-4 h-4 rounded-full" />

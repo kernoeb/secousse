@@ -348,7 +348,7 @@ const ChatMessageView = memo(function ChatMessageView(props: ChatMessageViewProp
 
 function ChatNoticeView({ msg }: { msg: ChatMessage }) {
   return (
-    <div className="text-[13px] leading-tight break-words py-0.5 px-2 my-0.5 border-l-2 border-twitch/60 bg-white/[0.03] rounded-sm text-muted italic">
+    <div className="select-text text-[13px] leading-tight break-words py-0.5 px-2 my-0.5 border-l-2 border-twitch/60 bg-white/[0.03] rounded-sm text-muted italic">
       {msg.message}
     </div>
   );
@@ -406,7 +406,7 @@ function ChatUserMessageView({ msg, emotes, badgeIndex, onImageLoad, selfLogin, 
   return (
     <div
       className={cn(
-        "group relative text-[13px] leading-tight break-words py-0.5",
+        "group relative select-text text-[13px] leading-tight break-words py-0.5",
         isMention && "-mx-2 pl-1.5 pr-2 border-l-2 border-twitch bg-twitch/15 rounded-r-sm",
         msg.deleted && "opacity-50",
       )}

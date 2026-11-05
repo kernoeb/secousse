@@ -323,7 +323,7 @@ function ChannelItem({
         </div>
         {isSidebarOpen && (
           <div className="ml-3 flex-1 min-w-0 flex flex-col items-start overflow-hidden text-left">
-            <span className="font-semibold text-[13px] truncate w-full">{displayName}</span>
+            <span className="select-text font-semibold text-[13px] truncate w-full">{displayName}</span>
             <span className="text-[11px] text-muted truncate w-full italic">
               {gameName || t("channel.streaming")}
             </span>
