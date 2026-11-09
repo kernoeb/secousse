@@ -26,6 +26,8 @@ function canReplyTo(msg: ChatMessage): boolean {
   return !msg.system && !msg.deleted && !!msg.id && !msg.id.startsWith("self-");
 }
 
+const messageKey = (m: ChatMessage) => m._renderKey ?? m.id;
+
 interface ChatProps {
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
@@ -78,9 +80,9 @@ export function Chat({
   const displayed = useMemo(() => {
     if (!snapshot) return messages;
     const deleted = new Map<string, ChatMessage>();
-    for (const m of messages) if (m.deleted) deleted.set(m._renderKey ?? m.id, m);
+    for (const m of messages) if (m.deleted) deleted.set(messageKey(m), m);
     if (deleted.size === 0) return snapshot;
-    return snapshot.map((m) => deleted.get(m._renderKey ?? m.id) ?? m);
+    return snapshot.map((m) => deleted.get(messageKey(m)) ?? m);
   }, [snapshot, messages]);
   const displayedLenRef = useRef(0);
   displayedLenRef.current = displayed.length;
@@ -150,7 +152,7 @@ export function Chat({
   }, []);
 
   // rAF coalesces N pin requests per frame (hot when many emote <img> onLoad
-  // fire near-simultaneously alongside the messages-length effect).
+  // fire near-simultaneously alongside the new-message effect).
   const pinRafRef = useRef<number | null>(null);
   const pinToLast = useCallback(() => {
     if (!isFollowingRef.current) return;
@@ -183,9 +185,13 @@ export function Chat({
     }
   }, [closeBottomGap, pinToLast]);
 
+  // Keyed on the last message, not the length: once the buffer is full at 300,
+  // the length stops changing while every new message still needs a pin.
+  const lastMessage = messages[messages.length - 1];
+  const lastKey = lastMessage ? messageKey(lastMessage) : null;
   useEffect(() => {
     pinToLast();
-  }, [messages.length, pinToLast]);
+  }, [lastKey, pinToLast]);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -247,7 +253,7 @@ export function Chat({
         >
           {displayed.map((m) => (
             <ChatMessageView
-              key={m._renderKey ?? m.id}
+              key={messageKey(m)}
               msg={m}
               emotes={emotes}
               badgeIndex={badgeIndex}
