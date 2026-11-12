@@ -10,7 +10,8 @@ interface UseUserInfoOptions {
 
 export function useUserInfo(channel: string | null, options: UseUserInfoOptions = {}): { userInfo: UserInfo | null } {
   const { refreshMs = 60_000, skip = false } = options;
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  // Tagged with its channel so a switch never shows the previous channel's data.
+  const [fetched, setFetched] = useState<{ channel: string; info: UserInfo | null } | null>(null);
 
   useEffect(() => {
     if (!channel || skip) return;
@@ -23,7 +24,7 @@ export function useUserInfo(channel: string | null, options: UseUserInfoOptions 
       try {
         const data = await invoke<GetUserInfoResponse>("get_user_info", { login: channel });
         failures = 0;
-        if (!cancelled) setUserInfo(data.user);
+        if (!cancelled) setFetched({ channel, info: data.user });
       } catch (err) {
         logError(`[useUserInfo] get_user_info failed for ${channel}: ${err}`);
         // Until it succeeds the player cannot tell live from offline, so retry soon.
@@ -39,5 +40,5 @@ export function useUserInfo(channel: string | null, options: UseUserInfoOptions 
     };
   }, [channel, skip, refreshMs]);
 
-  return { userInfo };
+  return { userInfo: fetched && fetched.channel === channel ? fetched.info : null };
 }
