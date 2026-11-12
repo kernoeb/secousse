@@ -150,26 +150,26 @@ async fn open_popout(app: tauri::AppHandle, channel: String) -> Result<(), Strin
 #[tauri::command]
 async fn get_stream_url(state: State<'_, AppState>, login: String) -> Result<String, String> {
     let client = state.twitch_client.lock().await.clone();
-    let token = client.get_playback_access_token(&login).await.map_err(|e| e.to_string())?;
+    let token = client.get_playback_access_token(&login).await.map_err(|e| format!("{e:#}"))?;
     Ok(client.get_usher_url(&login, &token))
 }
 
 #[tauri::command]
 async fn get_vod_playback(state: State<'_, AppState>, vod_id: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_vod_playback(&vod_id).await.map_err(|e| e.to_string())
+    client.get_vod_playback(&vod_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_user_info(state: State<'_, AppState>, login: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_user_info(&login).await.map_err(|e| e.to_string())
+    client.get_user_info(&login).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_users_info(state: State<'_, AppState>, logins: Vec<String>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_users_info(logins).await.map_err(|e| e.to_string())
+    client.get_users_info(logins).await.map_err(|e| format!("{e:#}"))
 }
 
 /// Rebuild the macOS menu bar in the UI language. Other platforms have no menu bar.
@@ -188,7 +188,7 @@ fn set_menu_language(app: tauri::AppHandle, language: String) -> Result<(), Stri
 #[tauri::command]
 async fn get_collaborations(state: State<'_, AppState>, channel_ids: Vec<String>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_collaborations(channel_ids).await.map_err(|e| e.to_string())
+    client.get_collaborations(channel_ids).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -197,7 +197,7 @@ async fn get_self_info(state: State<'_, AppState>) -> Result<serde_json::Value, 
     if !client.is_authenticated() {
         return Err("Not logged in".to_string());
     }
-    let result = client.get_self_info().await.map_err(|e| e.to_string())?;
+    let result = client.get_self_info().await.map_err(|e| format!("{e:#}"))?;
 
     if let Some(username) = result.get("viewer").and_then(|v| v.get("login")).and_then(|l| l.as_str()) {
         *state.cached_username.lock().await = Some(username.to_string());
@@ -212,19 +212,19 @@ async fn get_followed_channels(state: State<'_, AppState>, user_id: String) -> R
     if !client.is_authenticated() {
         return Err("Not logged in".to_string());
     }
-    client.get_followed_channels(&user_id).await.map_err(|e| e.to_string())
+    client.get_followed_channels(&user_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_global_badges(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_global_badges().await.map_err(|e| e.to_string())
+    client.get_global_badges().await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_channel_badges(state: State<'_, AppState>, channel_id: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_channel_badges(&channel_id).await.map_err(|e| e.to_string())
+    client.get_channel_badges(&channel_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -249,13 +249,13 @@ async fn get_global_emotes() -> Result<Vec<Emote>, String> {
 #[tauri::command]
 async fn get_twitch_global_emotes(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_twitch_global_emotes().await.map_err(|e| e.to_string())
+    client.get_twitch_global_emotes().await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_twitch_channel_emotes(state: State<'_, AppState>, channel_id: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_twitch_channel_emotes(&channel_id).await.map_err(|e| e.to_string())
+    client.get_twitch_channel_emotes(&channel_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -600,7 +600,7 @@ async fn set_access_token(state: State<'_, AppState>, token: String) -> Result<(
 #[tauri::command]
 async fn search_channels(state: State<'_, AppState>, query: String) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.search_channels(&query).await.map_err(|e| e.to_string())
+    client.search_channels(&query).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -609,7 +609,7 @@ async fn follow_channel(state: State<'_, AppState>, from_user_id: String, to_use
     if !client.is_authenticated() {
         return Err("Must be logged in to follow".to_string());
     }
-    client.follow_user(&from_user_id, &to_user_id).await.map_err(|e| e.to_string())
+    client.follow_user(&from_user_id, &to_user_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -618,13 +618,13 @@ async fn unfollow_channel(state: State<'_, AppState>, from_user_id: String, to_u
     if !client.is_authenticated() {
         return Err("Must be logged in to unfollow".to_string());
     }
-    client.unfollow_user(&from_user_id, &to_user_id).await.map_err(|e| e.to_string())
+    client.unfollow_user(&from_user_id, &to_user_id).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn get_top_streams(state: State<'_, AppState>, limit: Option<u32>) -> Result<serde_json::Value, String> {
     let client = state.twitch_client.lock().await.clone();
-    client.get_top_streams(limit.unwrap_or(30)).await.map_err(|e| e.to_string())
+    client.get_top_streams(limit.unwrap_or(30)).await.map_err(|e| format!("{e:#}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

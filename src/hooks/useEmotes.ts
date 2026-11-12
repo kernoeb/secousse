@@ -41,6 +41,15 @@ interface ChannelEmoteEntry {
   pending: Set<EmoteSource>;
 }
 
+type RetryTimers = Map<string, ReturnType<typeof setTimeout>>;
+
+function scheduleRetry(timers: RetryTimers, key: string, run: () => void) {
+  timers.set(key, setTimeout(() => {
+    timers.delete(key);
+    run();
+  }, RETRY_DELAY_MS));
+}
+
 type FetchChannel = (channelId: string, focus: boolean, force: boolean, attempt: number) => Promise<void>;
 
 interface UseEmotesReturn {
@@ -60,7 +69,7 @@ export function useEmotes(): UseEmotesReturn {
   const inflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const [focusedChannelId, setFocusedChannelIdInternal] = useState<string | null>(null);
   const [cacheRevision, setCacheRevision] = useState(0);
-  const retryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const retryTimersRef = useRef<RetryTimers>(new Map());
   const unmountedRef = useRef(false);
 
   useEffect(() => {
@@ -73,24 +82,27 @@ export function useEmotes(): UseEmotesReturn {
   }, []);
 
   useEffect(() => {
-    loadGlobalEmotes();
-    loadTwitchGlobalEmotes();
-    loadGlobalBadges();
-  }, []);
+    // Keys are prefixed so they cannot collide with channel ids in retryTimersRef.
+    const load = async (key: string, run: () => Promise<void>, attempt = 0) => {
+      try {
+        await run();
+      } catch (err) {
+        logError(`[useEmotes] Failed to load ${key}: ${err}`);
+        if (unmountedRef.current || attempt >= MAX_RETRIES || String(err).includes("401")) return;
+        scheduleRetry(retryTimersRef.current, `global:${key}`, () => load(key, run, attempt + 1));
+      }
+    };
 
-  async function loadGlobalEmotes() {
-    try {
+    load("global emotes", async () => {
       const emoteList: Emote[] = await invoke("get_global_emotes");
+      // The backend turns a failed fetch into an empty list.
+      if (emoteList.length === 0) throw new Error("no global emotes returned");
       const emoteMap = new Map<string, string>();
       emoteList.forEach(e => emoteMap.set(e.name, e.url));
       setGlobalEmotes(emoteMap);
-    } catch (err) {
-      logError(`[useEmotes] Failed to load global emotes: ${err}`);
-    }
-  }
+    });
 
-  async function loadTwitchGlobalEmotes() {
-    try {
+    load("Twitch global emotes", async () => {
       const data = await invoke<GetTwitchEmotesResponse>("get_twitch_global_emotes");
       if (data?.data) {
         const emoteMap = new Map<string, string>();
@@ -103,19 +115,13 @@ export function useEmotes(): UseEmotesReturn {
         info(`[useEmotes] Loaded ${emoteMap.size} Twitch global emotes`);
         setTwitchGlobalEmotes(emoteMap);
       }
-    } catch (err) {
-      logError(`[useEmotes] Failed to load Twitch global emotes: ${err}`);
-    }
-  }
+    });
 
-  async function loadGlobalBadges() {
-    try {
+    load("global badges", async () => {
       const data = await invoke<GetGlobalBadgesResponse>("get_global_badges");
       setGlobalBadges(data.badges);
-    } catch (err) {
-      logError(`[useEmotes] Failed to load global badges: ${err}`);
-    }
-  }
+    });
+  }, []);
 
   const fetchChannel = useCallback<FetchChannel>(async (channelId, focus, force, attempt) => {
     const cache = channelCacheRef.current;
@@ -192,14 +198,12 @@ export function useEmotes(): UseEmotesReturn {
           && !retryTimersRef.current.has(channelId);
         if (shouldRetry) {
           info(`[useEmotes] Partial load for ${channelId}, retrying in ${RETRY_DELAY_MS / 1000}s`);
-          const timer = setTimeout(() => {
-            retryTimersRef.current.delete(channelId);
+          scheduleRetry(retryTimersRef.current, channelId, () => {
             // Evicted meanwhile: nobody is watching this channel any more.
             if (!cache.has(channelId)) return;
             // Never refocus: the user may have moved on since the failure.
             fetchChannel(channelId, false, true, attempt + 1);
-          }, RETRY_DELAY_MS);
-          retryTimersRef.current.set(channelId, timer);
+          });
         }
       } catch (err) {
         logError(`[useEmotes] Failed to load channel emotes for ${channelId}: ${err}`);

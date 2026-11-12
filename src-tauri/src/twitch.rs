@@ -201,6 +201,8 @@ impl TwitchClient {
 
         let res = self.client.post(GQL_URL)
             .headers(self.gql_headers())
+            // The poller waits for this answer before it schedules the next one.
+            .timeout(std::time::Duration::from_secs(15))
             .json(&payload)
             .send()
             .await?;
